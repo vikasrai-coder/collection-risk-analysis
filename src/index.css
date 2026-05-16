@@ -1,0 +1,535 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700&family=Roboto:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Montserrat:wght@400;500;600;700&family=Lato:wght@400;700&family=Open+Sans:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * LeadFlow CRM — "Aurora Minimalist" design system
+ * ------------------------------------------------
+ * Single source of truth for colors, depth & motion.
+ * Design-only refactor: tokens are consumed via Tailwind theme.
+ * All colors are HSL channels (no `hsl(` wrapper) so opacity modifiers work.
+ */
+
+@layer base {
+  :root {
+    --font-inter: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --font-mona: "Mona Sans", "Hubot Sans", sans-serif;
+    --font-outfit: "Outfit", sans-serif;
+    --font-poppins: "Poppins", sans-serif;
+    --font-roboto: "Roboto", sans-serif;
+    --font-jakarta: "Plus Jakarta Sans", sans-serif;
+    --font-montserrat: "Montserrat", sans-serif;
+    --font-lato: "Lato", sans-serif;
+    --font-opensans: "Open Sans", sans-serif;
+    --font-source: "Source Sans 3", sans-serif;
+    --app-font-family: var(--font-inter);
+
+    /* ---------- Surfaces: Premium Elegance ---------- */
+    --background: 230 40% 99%;
+    --foreground: 230 30% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 230 30% 10%;
+    --card-muted: 230 15% 97%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 250 20% 12%;
+
+    /* ---------- Brand: Electric Blue + Deep Violet ---------- */
+    --primary: 230 100% 55%;
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 230 100% 48%;
+    --primary-soft: 230 100% 97%;
+
+    /* ---------- Secondary surface ---------- */
+    --secondary: 250 15% 93%;
+    --secondary-foreground: 250 20% 18%;
+
+    --muted: 250 10% 92%;
+    --muted-foreground: 250 8% 48%;
+
+    --accent: 320 95% 62%;
+    --accent-foreground: 0 0% 100%;
+    --accent-soft: 320 100% 97%;
+
+    /* ---------- Status palette: Sophisticated ---------- */
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --destructive-soft: 0 95% 97%;
+
+    --success: 145 75% 45%;
+    --success-foreground: 0 0% 100%;
+    --success-soft: 145 80% 95%;
+
+    --warning: 35 90% 58%;
+    --warning-foreground: 35 50% 20%;
+    --warning-soft: 35 100% 96%;
+
+    --info: 210 100% 60%;
+    --info-foreground: 0 0% 100%;
+    --info-soft: 210 100% 97%;
+
+    /* ---------- Lines & focus ---------- */
+    --border: 250 12% 88%;
+    --border-strong: 250 10% 80%;
+    --input: 250 12% 88%;
+    --ring: 260 85% 58%;
+
+    --radius: 1rem; /* 16px - very rounded for modern look */
+
+    /* ---------- Sidebar: Modern Glassy Slate ---------- */
+    --sidebar-background: 230 35% 7%;
+    --sidebar-foreground: 230 20% 90%;
+    --sidebar-primary: 230 100% 65%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 230 30% 14%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 230 25% 12%;
+    --sidebar-ring: 230 100% 65%;
+
+    /* ---------- Pipeline stage hues: Premium ---------- */
+    --stage-new: 210 95% 58%;
+    --stage-qualified: 260 85% 58%;
+    --stage-proposal: 35 90% 58%;
+    --stage-negotiation: 15 90% 60%;
+    --stage-won: 145 75% 45%;
+    --stage-lost: 0 84% 60%;
+
+    /* ---------- Elevation tokens: Refined ---------- */
+    --shadow-xs: 0 1px 2px hsl(230 30% 10% / 0.04);
+    --shadow-card: 0 1px 4px hsl(230 30% 10% / 0.05), 0 2px 8px hsl(230 30% 10% / 0.03);
+    --shadow-soft: 0 6px 18px -4px hsl(230 30% 10% / 0.06), 0 4px 10px -2px hsl(230 30% 10% / 0.04);
+    --shadow-lift: 0 20px 40px -10px hsl(230 30% 10% / 0.1), 0 8px 20px -6px hsl(230 30% 10% / 0.05);
+    --shadow-pop: 0 40px 80px -15px hsl(230 30% 10% / 0.15), 0 15px 30px -10px hsl(230 30% 10% / 0.08);
+    --shadow-glow-primary: 0 0 0 4px hsl(230 100% 55% / 0.1), 0 20px 40px -10px hsl(230 100% 55% / 0.2);
+    --shadow-glow-soft: 0 15px 35px -10px hsl(230 100% 55% / 0.15);
+    --shadow-inner-soft: inset 0 1px 0 hsl(0 0% 100% / 0.5);
+
+    /* ---------- Gradients: Ultra Modern ---------- */
+    --gradient-primary: linear-gradient(135deg, hsl(230 100% 55%) 0%, hsl(270 90% 60%) 100%);
+    --gradient-glass: linear-gradient(135deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0.1) 100%);
+    --gradient-mesh: 
+      radial-gradient(at 0% 0%, hsla(230, 100%, 95%, 1) 0px, transparent 50%),
+      radial-gradient(at 100% 0%, hsla(270, 100%, 95%, 1) 0px, transparent 50%),
+      radial-gradient(at 50% 100%, hsla(195, 100%, 95%, 1) 0px, transparent 50%);
+  }
+
+  .dark {
+    --background: 230 30% 8%;
+    --foreground: 220 25% 95%;
+    --card: 230 28% 11%;
+    --card-foreground: 220 25% 95%;
+    --card-muted: 230 28% 13%;
+    --popover: 230 28% 11%;
+    --popover-foreground: 220 25% 95%;
+    --primary: 247 84% 68%;
+    --primary-foreground: 230 35% 11%;
+    --primary-hover: 247 84% 72%;
+    --primary-soft: 247 50% 22%;
+    --secondary: 230 25% 16%;
+    --secondary-foreground: 220 25% 95%;
+    --muted: 230 25% 16%;
+    --muted-foreground: 220 14% 65%;
+    --accent: 186 90% 55%;
+    --accent-foreground: 230 30% 8%;
+    --accent-soft: 186 60% 22%;
+    --destructive: 352 70% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --destructive-soft: 352 50% 22%;
+    --success: 156 70% 50%;
+    --success-foreground: 230 30% 8%;
+    --success-soft: 156 50% 18%;
+    --warning: 38 95% 60%;
+    --warning-foreground: 38 50% 12%;
+    --warning-soft: 38 60% 18%;
+    --info: 214 95% 65%;
+    --info-foreground: 230 30% 8%;
+    --info-soft: 214 60% 22%;
+    --border: 230 22% 20%;
+    --border-strong: 230 22% 28%;
+    --input: 230 22% 20%;
+    --ring: 247 84% 68%;
+
+    /* Sidebar in dark mode — slightly deeper than card surface */
+    --sidebar-background: 230 35% 6%;
+    --sidebar-foreground: 220 25% 88%;
+    --sidebar-primary: 247 84% 70%;
+    --sidebar-primary-foreground: 230 35% 11%;
+    --sidebar-accent: 230 30% 13%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 230 25% 14%;
+    --sidebar-ring: 247 84% 70%;
+
+    /* Stage hues — slightly brightened for legibility on dark */
+    --stage-new: 214 95% 68%;
+    --stage-qualified: 264 80% 72%;
+    --stage-proposal: 38 95% 62%;
+    --stage-negotiation: 16 92% 68%;
+    --stage-won: 156 70% 52%;
+    --stage-lost: 352 75% 66%;
+
+    /* Re-tuned shadows / glows for dark surfaces */
+    --shadow-xs: 0 1px 2px hsl(0 0% 0% / 0.35);
+    --shadow-card: 0 1px 2px hsl(0 0% 0% / 0.35), 0 1px 3px hsl(0 0% 0% / 0.30);
+    --shadow-soft: 0 2px 8px -2px hsl(0 0% 0% / 0.50), 0 1px 2px hsl(0 0% 0% / 0.30);
+    --shadow-lift: 0 12px 28px -10px hsl(0 0% 0% / 0.65), 0 4px 10px -4px hsl(0 0% 0% / 0.40);
+    --shadow-pop: 0 24px 48px -12px hsl(0 0% 0% / 0.70), 0 8px 16px -8px hsl(0 0% 0% / 0.45);
+    --shadow-glow-primary: 0 0 0 4px hsl(247 84% 68% / 0.18), 0 12px 24px -10px hsl(247 84% 68% / 0.55);
+    --shadow-glow-soft: 0 8px 20px -6px hsl(247 84% 68% / 0.32);
+
+    /* Board pattern softer on dark */
+    --gradient-board:
+      radial-gradient(circle at 1px 1px, hsl(220 16% 50% / 0.18) 1px, transparent 0);
+    --gradient-mesh:
+      radial-gradient(at 18% 12%, hsl(247 60% 22%) 0px, transparent 45%),
+      radial-gradient(at 82% 8%, hsl(186 50% 18%) 0px, transparent 50%),
+      radial-gradient(at 50% 100%, hsl(230 30% 8%) 0px, transparent 60%);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    font-size: 16px;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--app-font-family);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-size: 1rem; /* This will be 13px because of html { font-size: 13px } */
+  }
+
+  html[data-font="mona"],
+  body[data-font="mona"] {
+    --app-font-family: var(--font-mona);
+  }
+
+  html[data-font="inter"],
+  body[data-font="inter"] {
+    --app-font-family: var(--font-inter);
+  }
+
+  html[data-font="outfit"],
+  body[data-font="outfit"] {
+    --app-font-family: var(--font-outfit);
+  }
+
+  html[data-font="poppins"],
+  body[data-font="poppins"] {
+    --app-font-family: var(--font-poppins);
+  }
+
+  html[data-font="roboto"],
+  body[data-font="roboto"] {
+    --app-font-family: var(--font-roboto);
+  }
+
+  html[data-font="jakarta"],
+  body[data-font="jakarta"] {
+    --app-font-family: var(--font-jakarta);
+  }
+  
+  html[data-font="montserrat"],
+  body[data-font="montserrat"] {
+    --app-font-family: var(--font-montserrat);
+  }
+  
+  html[data-font="lato"],
+  body[data-font="lato"] {
+    --app-font-family: var(--font-lato);
+  }
+  
+  html[data-font="opensans"],
+  body[data-font="opensans"] {
+    --app-font-family: var(--font-opensans);
+  }
+  
+  html[data-font="source"],
+  body[data-font="source"] {
+    --app-font-family: var(--font-source);
+  }
+
+  #root {
+    font-family: inherit;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.18);
+    color: hsl(var(--foreground));
+  }
+}
+
+/* ============================================================
+ * Utility components — keep in /styles, single source of truth.
+ * Used by Pipeline board, Deal Cards, Sidebar etc.
+ * ============================================================ */
+
+@layer components {
+  /* -------- Stage pill -------- */
+  .stage-pill {
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider;
+  }
+
+  /* -------- Pipeline board -------- */
+  .pipeline-board {
+    background-color: hsl(var(--background));
+    background-image: var(--gradient-board);
+    background-size: 22px 22px;
+    background-position: 0 0;
+  }
+
+  .kanban-column {
+    @apply flex flex-col rounded-xl;
+    width: 280px;
+    flex-shrink: 0;
+    background: linear-gradient(180deg, hsl(var(--card-muted)) 0%, hsl(var(--background)) 100%);
+    border: 1px solid hsl(var(--border) / 0.6);
+    box-shadow: var(--shadow-xs);
+    transition: border-color 200ms ease, box-shadow 200ms ease;
+  }
+
+  .kanban-column:hover {
+    border-color: hsl(var(--border-strong));
+    box-shadow: var(--shadow-soft);
+  }
+
+  .kanban-column-head {
+    @apply px-4 py-3 flex items-center justify-between gap-2 rounded-t-xl;
+    background: hsl(var(--card) / 0.6);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid hsl(var(--border) / 0.7);
+  }
+
+  .kanban-column-body {
+    @apply flex-1 p-2.5 space-y-2.5 relative overflow-y-auto;
+  }
+
+  .kanban-column-body[data-dragging="true"] {
+    background: hsl(var(--primary) / 0.07);
+    box-shadow: inset 0 0 0 2px hsl(var(--primary) / 0.45);
+    border-radius: 0 0 calc(var(--radius) + 4px) calc(var(--radius) + 4px);
+  }
+
+  .dark .kanban-column-head {
+    background: hsl(var(--card) / 0.85);
+  }
+
+  /* -------- Stage indicator dots / rails -------- */
+  .stage-dot {
+    @apply h-2 w-2 rounded-full inline-block shrink-0;
+  }
+  .stage-dot--new { background: hsl(var(--stage-new)); }
+  .stage-dot--qualified { background: hsl(var(--stage-qualified)); }
+  .stage-dot--intro { background: hsl(var(--stage-new)); }
+  .stage-dot--proposal { background: hsl(var(--stage-proposal)); }
+  .stage-dot--negotiation,
+  .stage-dot--negotiations { background: hsl(var(--stage-negotiation)); }
+  .stage-dot--contract { background: hsl(var(--stage-qualified)); }
+  .stage-dot--won { background: hsl(var(--stage-won)); }
+  .stage-dot--lost { background: hsl(var(--stage-lost)); }
+
+  /* -------- Deal Card — solid + 8px radius + subtle shadow,
+              hover = LIFT + GLOW + color SHIFT (combination)   -------- */
+  .deal-card {
+    position: relative;
+    display: block;
+    background: hsl(var(--card));
+    color: hsl(var(--card-foreground));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+    padding: 0.75rem 0.875rem 0.75rem 0.875rem;
+    cursor: pointer;
+    isolation: isolate;
+    overflow: hidden;
+    transition:
+      transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      box-shadow 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      border-color 220ms ease;
+    will-change: transform;
+  }
+
+  .deal-card::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: hsl(var(--stage-new));
+    opacity: 0.85;
+    transition: height 220ms ease, opacity 220ms ease;
+  }
+
+  .deal-card[data-stage="qualified"]::before { background: hsl(var(--stage-qualified)); }
+  .deal-card[data-stage="intro"]::before     { background: hsl(var(--stage-new)); }
+  .deal-card[data-stage="proposal"]::before  { background: hsl(var(--stage-proposal)); }
+  .deal-card[data-stage="negotiations"]::before,
+  .deal-card[data-stage="negotiation"]::before { background: hsl(var(--stage-negotiation)); }
+  .deal-card[data-stage="contract"]::before { background: hsl(var(--stage-qualified)); }
+  .deal-card[data-stage="won"]::before       { background: hsl(var(--stage-won)); }
+  .deal-card[data-stage="lost"]::before      { background: hsl(var(--stage-lost)); }
+
+  .deal-card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background:
+      radial-gradient(120% 60% at 0% 0%, hsl(var(--primary) / 0.06), transparent 60%);
+    opacity: 0;
+    transition: opacity 220ms ease;
+    pointer-events: none;
+  }
+
+  .deal-card:hover {
+    transform: translateY(-3px);
+    border-color: hsl(var(--primary) / 0.5);
+    box-shadow: var(--shadow-lift), var(--shadow-glow-soft);
+  }
+
+  .deal-card:hover::before { height: 4px; opacity: 1; }
+  .deal-card:hover::after  { opacity: 1; }
+
+  .deal-card:focus-visible {
+    outline: none;
+    border-color: hsl(var(--primary));
+    box-shadow: var(--shadow-glow-primary);
+  }
+
+  .deal-card[data-dragging="true"] {
+    transform: rotate(-1.5deg) scale(1.02);
+    box-shadow: var(--shadow-pop), 0 0 0 2px hsl(var(--primary) / 0.45);
+    border-color: hsl(var(--primary));
+  }
+
+  .deal-card--won {
+    background: linear-gradient(180deg, hsl(var(--success-soft)) 0%, hsl(var(--card)) 60%);
+  }
+  .deal-card--lost { opacity: 0.78; }
+
+  .dark .deal-card::after {
+    background:
+      radial-gradient(120% 60% at 0% 0%, hsl(var(--primary) / 0.16), transparent 60%);
+  }
+
+  /* -------- Brand chip / icon plate -------- */
+  .brand-chip {
+    background: var(--gradient-primary);
+    color: hsl(var(--primary-foreground));
+    box-shadow: 0 6px 14px -6px hsl(var(--primary) / 0.55), inset 0 1px 0 hsl(0 0% 100% / 0.25);
+  }
+
+  /* -------- Sidebar nav item -------- */
+  .nav-icon {
+    @apply relative w-[60px] h-[60px] flex flex-col items-center justify-center rounded-md gap-1
+           text-[11px] leading-none transition-colors duration-150;
+    color: hsl(var(--sidebar-foreground) / 0.85);
+  }
+  .nav-icon:hover {
+    background: hsl(var(--sidebar-accent));
+    color: hsl(var(--sidebar-accent-foreground));
+  }
+  .nav-icon.is-active {
+    color: hsl(0 0% 100%);
+    background: linear-gradient(135deg, hsl(var(--sidebar-primary) / 0.22), hsl(var(--sidebar-primary) / 0.08));
+    box-shadow: inset 2px 0 0 hsl(var(--sidebar-primary));
+  }
+  .nav-icon.is-active::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 14px; bottom: 14px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: hsl(var(--sidebar-primary));
+    box-shadow: 0 0 12px hsl(var(--sidebar-primary) / 0.6);
+  }
+}
+
+/* -------- Custom scrollbar (refined) -------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: hsl(220 14% 70% / 0.35);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: background 150ms ease;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--primary) / 0.45);
+  background-clip: content-box;
+}
+
+/* --- Landing Page Custom Utilities --- */
+@keyframes glow-pulse {
+  0%, 100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-glow-pulse {
+  animation: glow-pulse 3s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+.animate-marquee {
+  animation: marquee 30s linear infinite;
+}
+
+.modern-card {
+  @apply bg-card border border-border/60 shadow-card rounded-2xl transition-all duration-300;
+}
+.modern-card:hover {
+  @apply shadow-lift border-primary/20 -translate-y-1;
+}
+
+.glass-panel {
+  @apply bg-white/70 backdrop-blur-md border border-white/20 shadow-soft;
+}
+
+.dark .glass-panel {
+  @apply bg-black/40 backdrop-blur-md border-white/10 shadow-pop;
+}
+
+.text-gradient {
+  @apply bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent;
+}
+
+.sidebar-item-active {
+  @apply bg-primary/15 text-primary shadow-glow-soft;
+}
+
