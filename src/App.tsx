@@ -21,6 +21,9 @@ import {
   Plus,
   Key,
   Mail,
+  X,
+  Calendar,
+  FileText,
 } from "lucide-react";
 
 type Page = "dashboard" | "followup" | "records" | "upload" | "users";
@@ -839,16 +842,49 @@ function App() {
     };
   }, [filteredRecords]);
 
+  const dailyHandledRecords = useMemo(() => {
+    return filteredRecords.filter((record) => !!record.updatedAt);
+  }, [filteredRecords]);
+
+  const dailyHandledAmount = useMemo(() => {
+    return dailyHandledRecords.reduce((sum, record) => sum + (record.defaultAmount || 0), 0);
+  }, [dailyHandledRecords]);
+
   const distinctAgents = useMemo(() => {
     const agents = new Set<string>();
-    interactionLogs.forEach(log => {
-      if (log.updatedBy) agents.add(log.updatedBy);
-    });
-    agents.add("vikas.rai@kredmint.com");
-    agents.add("admin@kredmint.com");
-    if (user?.email) agents.add(user.email);
+    
+    // 1. Gather from registered user accounts in the UI state
+    if (usersList && Array.isArray(usersList)) {
+      usersList.forEach(u => {
+        if (u.email) agents.add(u.email.toLowerCase().trim());
+      });
+    }
+    
+    // 2. Gather from actual interaction logs to capture any active loggers
+    if (interactionLogs && Array.isArray(interactionLogs)) {
+      interactionLogs.forEach(log => {
+        if (log.updatedBy) agents.add(log.updatedBy.toLowerCase().trim());
+      });
+    }
+    
+    // 3. Add all system-seeded admin and manager accounts
+    const systemAgents = [
+      "vikas.rai@kredmint.com",
+      "admin@kredmint.com",
+      "vikas.raiexp@gmail.com",
+      "gurudutt@kredmint.com",
+      "praveen.chauhan@kredmint.com",
+      "ritik@kredmint.com"
+    ];
+    systemAgents.forEach(email => agents.add(email.toLowerCase().trim()));
+    
+    // 4. Ensure current logged-in user is present
+    if (user?.email) {
+      agents.add(user.email.toLowerCase().trim());
+    }
+    
     return Array.from(agents);
-  }, [interactionLogs, user]);
+  }, [interactionLogs, usersList, user]);
 
   const agentClosureStats = useMemo(() => {
     const agentLogs = selectedPerformanceAgent === "All Agents"
@@ -886,17 +922,38 @@ function App() {
     };
   }, [selectedPerformanceAgent, interactionLogs, records]);
 
-  const selectedUserLogs = useMemo(() => {
-    if (!selectedUserId) return [];
-    return interactionLogs.filter(
-      (log) => log.userId === selectedUserId || log.loanId === selectedUserId
-    );
-  }, [selectedUserId, interactionLogs]);
-
   const selectedUserRecord = useMemo(() => {
     if (!selectedUserId) return null;
     return records.find((r) => r.userId === selectedUserId || r.loanId === selectedUserId);
   }, [selectedUserId, records]);
+
+  const selectedUserLogs = useMemo(() => {
+    if (!selectedUserId) return [];
+    const logs = [...interactionLogs.filter(
+      (log) => log.userId === selectedUserId || log.loanId === selectedUserId
+    )];
+
+    // If the active record has a sheet-imported remark or status, synthesize a virtual log
+    // so it shows chronologically inside the Interaction Activity Timeline
+    if (selectedUserRecord && (selectedUserRecord.remark || selectedUserRecord.callStatus)) {
+      const hasInitialLog = logs.some(log => log.id === `initial-sheet-remark-${selectedUserRecord.id}`);
+      if (!hasInitialLog) {
+        logs.push({
+          id: `initial-sheet-remark-${selectedUserRecord.id}`,
+          loanId: selectedUserRecord.loanId,
+          userId: selectedUserRecord.userId,
+          customerName: selectedUserRecord.customerName,
+          callStatus: selectedUserRecord.callStatus || selectedUserRecord.status || "Call Back Later",
+          remark: selectedUserRecord.remark,
+          followUpDate: selectedUserRecord.followUpDate,
+          updatedAt: selectedUserRecord.updatedAt || selectedUserRecord.collectionDate || "2026-05-17T10:00:00Z",
+          updatedBy: "System Import"
+        });
+      }
+    }
+
+    return logs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }, [selectedUserId, interactionLogs, selectedUserRecord]);
 
   const statusBreakdown = useMemo(() => {
     const source = new Map<string, number>();
@@ -1583,13 +1640,12 @@ function App() {
                 </section>
 
                 {/* Agent Performance & Closure Efficiency Analytics Suite */}
-                <Panel title="📈 Agent Performance & Case Closure Analytics" subtitle="Real-time collection closure rates and recovery efficiency reports">
+                <Panel title="📈 Agent Performance & Case Closure Analytics">
                   <div className="space-y-6">
                     {/* Agent Selection Filter */}
                     <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
                       <div>
-                        <div className="text-sm font-semibold text-slate-800">Select Collection Officer</div>
-                        <p className="text-xs text-slate-500 mt-0.5">Filter the closure metrics below by individual recovery agents</p>
+                        <div className="text-sm font-semibold text-slate-800">Select Collection Agent</div>
                       </div>
                       <div className="w-full max-w-xs">
                         <select
@@ -1799,7 +1855,11 @@ function App() {
             {activePage === "followup" && (
               <>
                 <section className="grid gap-4 md:grid-cols-4">
-                  <MetricCard icon={PhoneCall} label="Handled Today" value={String(filteredRecords.filter((record) => !!record.updatedAt).length)} />
+                  <MetricCard
+                    icon={PhoneCall}
+                    label="Handled Today"
+                    value={`${formatCurrency(dailyHandledAmount)} / ${dailyHandledRecords.length} ${dailyHandledRecords.length === 1 ? "loan" : "loans"}`}
+                  />
                   <MetricCard icon={CheckCircle2} label="Payment Done" value={String(summary.paymentDoneCount)} />
                   <MetricCard icon={Clock3} label="Pending Queue" value={String(filteredRecords.filter((record) => record.callStatus !== "Payment Done").length)} />
                   <MetricCard icon={BellRing} label="Reminder Queue" value={String(reminderQueue.length)} />
@@ -1868,9 +1928,31 @@ function App() {
                                   {group.userId}
                                 </button>
                               </td>
-                              <td className="py-3">{group.customerName || "-"}</td>
+                              <td className="py-3">
+                                {editing ? (
+                                  <input
+                                    type="text"
+                                    value={draft.customerName || ""}
+                                    onChange={(e) => updateFollowupDraft(group, { customerName: e.target.value })}
+                                    className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-sm outline-none focus:border-cyan-400"
+                                  />
+                                ) : (
+                                  group.customerName || "-"
+                                )}
+                              </td>
                               <td className="py-3">{group.lender}</td>
-                              <td className="py-3">{group.anchor || "-"}</td>
+                              <td className="py-3">
+                                {editing ? (
+                                  <input
+                                    type="text"
+                                    value={draft.anchor || ""}
+                                    onChange={(e) => updateFollowupDraft(group, { anchor: e.target.value })}
+                                    className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-sm outline-none focus:border-cyan-400"
+                                  />
+                                ) : (
+                                  group.anchor || "-"
+                                )}
+                              </td>
                               <td className="py-3">
                                 <div className="space-y-2">
                                   {group.mobile ? (
@@ -2118,6 +2200,26 @@ function App() {
 
                           {editing ? (
                             <div className="mt-4 space-y-3">
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">Customer Name</label>
+                                <input
+                                  type="text"
+                                  value={draft.customerName || ""}
+                                  onChange={(e) => updateFollowupDraft(group, { customerName: e.target.value })}
+                                  className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-cyan-400"
+                                  placeholder="Customer Name"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">Anchor</label>
+                                <input
+                                  type="text"
+                                  value={draft.anchor || ""}
+                                  onChange={(e) => updateFollowupDraft(group, { anchor: e.target.value })}
+                                  className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-cyan-400"
+                                  placeholder="Anchor"
+                                />
+                              </div>
                               <select
                                 value={draft.callStatus || "Pending"}
                                 disabled={locked}
@@ -2405,6 +2507,122 @@ function App() {
                     </table>
                   </div>
                 </Panel>
+
+                {/* Telegram Alerts Integration */}
+                <div className="grid gap-6 lg:grid-cols-3 mt-6">
+                  <div className="lg:col-span-2">
+                    <Panel title="🔔 Telegram Reminders Configuration" subtitle="Configure automated alert updates for collection agents">
+                      <form onSubmit={handleSaveTelegramSettings} className="space-y-4">
+                        {telegramSaveSuccess && (
+                          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400 animate-pulse">
+                            {telegramSaveSuccess}
+                          </div>
+                        )}
+                        
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                              Telegram Bot Token
+                            </label>
+                            <input
+                              type="password"
+                              value={telegramSettings.botToken}
+                              onChange={(e) => setTelegramSettings(prev => ({ ...prev, botToken: e.target.value }))}
+                              placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
+                              className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                              Agent Chat ID
+                            </label>
+                            <input
+                              type="text"
+                              value={telegramSettings.chatId}
+                              onChange={(e) => setTelegramSettings(prev => ({ ...prev, chatId: e.target.value }))}
+                              placeholder="-100123456789 or 98765432"
+                              className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2 items-center">
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                              Agent Reference Name
+                            </label>
+                            <input
+                              type="text"
+                              value={telegramSettings.agentName}
+                              onChange={(e) => setTelegramSettings(prev => ({ ...prev, agentName: e.target.value }))}
+                              placeholder="Vikas Rai"
+                              className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition"
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-3 pt-4">
+                            <input
+                              type="checkbox"
+                              id="telegram-alerts-enabled"
+                              checked={telegramSettings.isEnabled}
+                              onChange={(e) => setTelegramSettings(prev => ({ ...prev, isEnabled: e.target.checked }))}
+                              className="h-5 w-5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                            />
+                            <label htmlFor="telegram-alerts-enabled" className="text-sm font-semibold text-slate-700 select-none cursor-pointer">
+                              Enable Automated Operational Hour alerts (10 AM - 6 PM)
+                            </label>
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          className="rounded-2xl bg-cyan-600 px-6 py-2.5 font-semibold text-white shadow-lg transition hover:bg-cyan-700"
+                        >
+                          Save Settings
+                        </button>
+                      </form>
+                    </Panel>
+                  </div>
+
+                  <div className="lg:col-span-1">
+                    <Panel title="🧪 Telegram Alert Testing Suite" subtitle="Send an instant test notification to ensure credentials work">
+                      <div className="space-y-4">
+                        {telegramTestSuccess && (
+                          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
+                            {telegramTestSuccess}
+                          </div>
+                        )}
+                        {telegramTestError && (
+                          <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
+                            {telegramTestError}
+                          </div>
+                        )}
+
+                        <div className="space-y-2">
+                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                            Custom Test Message
+                          </label>
+                          <textarea
+                            value={telegramTestMessage}
+                            onChange={(e) => setTelegramTestMessage(e.target.value)}
+                            placeholder="Type a test alert message..."
+                            className="w-full h-20 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition resize-none"
+                          />
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={handleSendTelegramTest}
+                          disabled={telegramTestLoading}
+                          className="w-full rounded-2xl bg-slate-950 py-3 font-semibold text-white shadow-lg transition hover:bg-slate-800 disabled:bg-slate-300"
+                        >
+                          {telegramTestLoading ? "Sending Notification..." : "Dispatch Alert Now"}
+                        </button>
+                      </div>
+                    </Panel>
+                  </div>
+                </div>
               </>
             )}
 
@@ -2535,240 +2753,286 @@ function App() {
                     </Panel>
                   </div>
                 </div>
+              </div>
+            )}
 
-                {/* Telegram Alerts Integration */}
-                <div className="grid gap-6 lg:grid-cols-3 mt-6">
-                  <div className="lg:col-span-2">
-                    <Panel title="🔔 Telegram Reminders Configuration" subtitle="Configure automated alert updates for collection agents">
-                      <form onSubmit={handleSaveTelegramSettings} className="space-y-4">
-                        {telegramSaveSuccess && (
-                          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400 animate-pulse">
-                            {telegramSaveSuccess}
-                          </div>
-                        )}
-                        
-                        <div className="grid gap-4 md:grid-cols-2">
-                          <div className="space-y-2">
-                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
-                              Telegram Bot Token
-                            </label>
-                            <input
-                              type="password"
-                              value={telegramSettings.botToken}
-                              onChange={(e) => setTelegramSettings(prev => ({ ...prev, botToken: e.target.value }))}
-                              placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
-                              className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition"
-                            />
-                          </div>
-
-                          <div className="space-y-2">
-                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
-                              Agent Chat ID
-                            </label>
-                            <input
-                              type="text"
-                              value={telegramSettings.chatId}
-                              onChange={(e) => setTelegramSettings(prev => ({ ...prev, chatId: e.target.value }))}
-                              placeholder="-100123456789 or 98765432"
-                              className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="grid gap-4 md:grid-cols-2 items-center">
-                          <div className="space-y-2">
-                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
-                              Agent Reference Name
-                            </label>
-                            <input
-                              type="text"
-                              value={telegramSettings.agentName}
-                              onChange={(e) => setTelegramSettings(prev => ({ ...prev, agentName: e.target.value }))}
-                              placeholder="Vikas Rai"
-                              className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition"
-                            />
-                          </div>
-
-                          <div className="flex items-center gap-3 pt-4">
-                            <input
-                              type="checkbox"
-                              id="telegram-alerts-enabled"
-                              checked={telegramSettings.isEnabled}
-                              onChange={(e) => setTelegramSettings(prev => ({ ...prev, isEnabled: e.target.checked }))}
-                              className="h-5 w-5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
-                            />
-                            <label htmlFor="telegram-alerts-enabled" className="text-sm font-semibold text-slate-700 select-none cursor-pointer">
-                              Enable Automated Operational Hour alerts (10 AM - 6 PM)
-                            </label>
-                          </div>
-                        </div>
-
-                        <button
-                          type="submit"
-                          className="rounded-2xl bg-cyan-600 px-6 py-2.5 font-semibold text-white shadow-lg transition hover:bg-cyan-700"
-                        >
-                          Save Settings
-                        </button>
-                      </form>
-                    </Panel>
-                  </div>
-
-                  <div className="lg:col-span-1">
-                    <Panel title="🧪 Telegram Alert Testing Suite" subtitle="Send an instant test notification to ensure credentials work">
-                      <div className="space-y-4">
-                        {telegramTestSuccess && (
-                          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
-                            {telegramTestSuccess}
-                          </div>
-                        )}
-                        {telegramTestError && (
-                          <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
-                            {telegramTestError}
-                          </div>
-                        )}
-
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
-                            Custom Test Message
-                          </label>
-                          <textarea
-                            value={telegramTestMessage}
-                            onChange={(e) => setTelegramTestMessage(e.target.value)}
-                            placeholder="Type a test alert message..."
-                            className="w-full h-20 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition resize-none"
-                          />
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={handleSendTelegramTest}
-                          disabled={telegramTestLoading}
-                          className="w-full rounded-2xl bg-slate-950 py-3 font-semibold text-white shadow-lg transition hover:bg-slate-800 disabled:bg-slate-300"
-                        >
-                          {telegramTestLoading ? "Sending Notification..." : "Dispatch Alert Now"}
-                        </button>
-                      </div>
-                    </Panel>
-                  </div>
-                </div>
-
-                {/* Interactive Chronological History Timeline Drawer */}
-                {selectedUserId && (
-                  <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/60 backdrop-blur-sm">
+            {/* Interactive Chronological History Timeline Drawer */}
+            {selectedUserId && (
+              <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/60 backdrop-blur-sm transition-opacity duration-300 animate-fade-in">
                     {/* Backdrop Click Dismiss */}
                     <div className="absolute inset-0" onClick={() => setSelectedUserId(null)} />
                     
-                    <div className="relative w-full max-w-2xl bg-white h-full shadow-2xl flex flex-col animate-slide-in relative z-10 border-l border-slate-100">
+                    <div className="relative w-full max-w-4xl bg-slate-50 h-full shadow-2xl flex flex-col z-10 border-l border-slate-200 overflow-hidden animate-lift-in">
+                      
                       {/* Drawer Header */}
-                      <div className="flex items-center justify-between border-b border-slate-100 p-6 bg-slate-50">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="rounded-full bg-cyan-100 px-3 py-1 text-xs font-bold text-cyan-800">
-                              Timeline Report
-                            </span>
-                            <span className="text-xs text-slate-500 font-mono">ID: {selectedUserId}</span>
+                      <div className="flex items-center justify-between border-b border-slate-200/80 px-6 py-5 bg-white">
+                        <div className="flex items-center gap-4">
+                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-50 text-cyan-600 shadow-sm border border-cyan-100">
+                            <Users className="h-6 w-6" />
                           </div>
-                          <h3 className="text-xl font-black text-slate-900 mt-2">
-                            {selectedUserRecord?.customerName || "Interaction History"}
-                          </h3>
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            Chronological history logs of calls, remarks, and callbacks
-                          </p>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="rounded-full bg-cyan-100/80 px-2.5 py-0.5 text-xs font-bold text-cyan-800 border border-cyan-200">
+                                Case File
+                              </span>
+                              <span className="text-xs text-slate-500 font-mono font-medium">ID: {selectedUserId}</span>
+                            </div>
+                            <h3 className="text-xl font-bold text-slate-900 mt-1">
+                              {selectedUserRecord?.customerName || "Interaction History"}
+                            </h3>
+                          </div>
                         </div>
                         <button
                           onClick={() => setSelectedUserId(null)}
-                          className="rounded-full p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition"
+                          className="rounded-full p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition border border-transparent hover:border-slate-200"
                           title="Close panel"
                         >
-                          <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                          </svg>
+                          <X className="h-5 w-5" />
                         </button>
                       </div>
 
-                      {/* Customer Quick Summary Cards */}
-                      {selectedUserRecord && (
-                        <div className="p-6 bg-white border-b border-slate-100 grid gap-4 grid-cols-3">
-                          <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-3">
-                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Default Balance</div>
-                            <div className="text-sm font-black text-rose-600 mt-1">{formatCurrency(selectedUserRecord.defaultAmount)}</div>
+                      {/* Main Scrollable Split Body */}
+                      <div className="flex-1 overflow-y-auto p-6 md:grid md:grid-cols-12 md:gap-6 space-y-6 md:space-y-0">
+                        
+                        {/* LEFT COLUMN: Active Follow-up Tracker (5 cols) */}
+                        <div className="md:col-span-5 space-y-6">
+                          
+                          {/* Section Title */}
+                          <div className="flex items-center gap-2">
+                            <span className="h-1.5 w-1.5 rounded-full bg-cyan-500" />
+                            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Active Follow-up Tracker</h4>
                           </div>
-                          <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-3">
-                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Current Status</div>
-                            <div className="mt-1">
-                              <StatusPill value={selectedUserRecord.callStatus || selectedUserRecord.status || "Pending"} />
-                            </div>
-                          </div>
-                          <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-3">
-                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Lender</div>
-                            <div className="text-xs font-semibold text-slate-800 mt-1 truncate">{selectedUserRecord.lender || "-"}</div>
-                          </div>
-                        </div>
-                      )}
 
-                      {/* Timeline Body */}
-                      <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50">
-                        {selectedUserLogs.length === 0 ? (
-                          <div className="flex flex-col items-center justify-center h-64 text-slate-400 text-center px-4">
-                            <svg className="h-12 w-12 text-slate-300 stroke-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
-                            <p className="mt-4 text-sm font-semibold">No interaction history logs found for this customer</p>
-                            <p className="text-xs text-slate-500 mt-1">Updates made here will compile chronologically step-by-step</p>
-                          </div>
-                        ) : (
-                          <div className="relative border-l border-slate-200 pl-6 ml-3 space-y-8">
-                            {selectedUserLogs.map((log, index) => {
-                              const isFirst = index === 0;
-                              return (
-                                <div key={log.id} className="relative">
-                                  {/* Line Node Point */}
-                                  <span className={`absolute -left-[31px] top-1.5 flex h-4.5 w-4.5 items-center justify-center rounded-full ring-4 ring-white ${
-                                    isFirst ? "bg-cyan-600 ring-cyan-100" : "bg-slate-300"
-                                  }`}>
-                                    {isFirst && <span className="h-2 w-2 rounded-full bg-white" />}
-                                  </span>
+                          {/* Primary Status Card */}
+                          {selectedUserRecord && (
+                            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Current Status</span>
+                                <StatusPill value={selectedUserRecord.callStatus || selectedUserRecord.status || "Pending"} />
+                              </div>
 
-                                  {/* Log Details Container */}
-                                  <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-                                    <div className="flex items-center justify-between text-xs">
-                                      <div className="flex items-center gap-2">
-                                        <span className="font-bold text-slate-800">{log.updatedBy || "Agent"}</span>
-                                        <span className="text-slate-400">•</span>
-                                        <span className="text-slate-500">{formatDate(log.updatedAt)}</span>
-                                      </div>
-                                      <StatusPill value={log.callStatus} />
-                                    </div>
+                              <div className="pt-2 border-t border-slate-100">
+                                <div className="text-xs text-slate-400 font-medium">Default Balance</div>
+                                <div className="text-2xl font-black text-rose-600 tracking-tight mt-0.5">
+                                  {formatCurrency(selectedUserRecord.defaultAmount)}
+                                </div>
+                                <div className="text-[10px] text-slate-500 mt-0.5">
+                                  Total Loan: {formatCurrency(selectedUserRecord.loanAmount)}
+                                </div>
+                              </div>
 
-                                    {log.remark && (
-                                      <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-700 font-medium">
-                                        {log.remark}
-                                      </div>
-                                    )}
-
-                                    {log.followUpDate && (
-                                      <div className="flex items-center gap-2 text-xs font-semibold text-amber-600 bg-amber-50 rounded-lg px-2.5 py-1.5 w-fit">
-                                        <BellRing className="h-3 w-3" />
-                                        <span>Next Follow-up Callback: {log.followUpDate}</span>
-                                      </div>
-                                    )}
+                              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100 text-xs">
+                                <div>
+                                  <div className="text-slate-400 font-medium">Lender</div>
+                                  <div className="font-semibold text-slate-800 mt-0.5 truncate" title={selectedUserRecord.lender}>
+                                    {selectedUserRecord.lender || "-"}
                                   </div>
                                 </div>
-                              );
-                            })}
+                                <div>
+                                  <div className="text-slate-400 font-medium">Anchor Partner</div>
+                                  <div className="font-semibold text-slate-800 mt-0.5 truncate" title={selectedUserRecord.anchor}>
+                                    {selectedUserRecord.anchor || "-"}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Contact quick actions */}
+                          {selectedUserRecord && (selectedUserRecord.mobile || selectedUserRecord.alternateNumber) && (
+                            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+                              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Contact Channels</div>
+                              
+                              <div className="space-y-3">
+                                {selectedUserRecord.mobile && (
+                                  <div className="flex items-center justify-between rounded-2xl bg-slate-50 p-3 border border-slate-100">
+                                    <div>
+                                      <div className="text-[10px] font-bold text-slate-400 uppercase">Primary Mobile</div>
+                                      <div className="text-sm font-semibold text-slate-900 mt-0.5">{selectedUserRecord.mobile}</div>
+                                    </div>
+                                    <div className="flex gap-2">
+                                      <a
+                                        href={`tel:${selectedUserRecord.mobile}`}
+                                        className="rounded-xl border border-slate-200 bg-white p-2 text-slate-700 hover:bg-slate-100 hover:text-cyan-600 transition"
+                                        title="Voice Call"
+                                      >
+                                        <Phone className="h-4 w-4" />
+                                      </a>
+                                      <a
+                                        href={`https://wa.me/91${selectedUserRecord.mobile}`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="rounded-xl border border-slate-200 bg-white p-2 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition"
+                                        title="WhatsApp Chat"
+                                      >
+                                        <MessageCircle className="h-4 w-4" />
+                                      </a>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {selectedUserRecord.alternateNumber && (
+                                  <div className="flex items-center justify-between rounded-2xl bg-slate-50 p-3 border border-slate-100">
+                                    <div>
+                                      <div className="text-[10px] font-bold text-slate-400 uppercase">Alternate Mobile</div>
+                                      <div className="text-sm font-semibold text-slate-600 mt-0.5">{selectedUserRecord.alternateNumber}</div>
+                                    </div>
+                                    <div className="flex gap-2">
+                                      <a
+                                        href={`tel:${selectedUserRecord.alternateNumber}`}
+                                        className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-100 hover:text-cyan-600 transition"
+                                        title="Voice Call"
+                                      >
+                                        <Phone className="h-4 w-4" />
+                                      </a>
+                                      <a
+                                        href={`https://wa.me/91${selectedUserRecord.alternateNumber}`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="rounded-xl border border-slate-200 bg-white p-2 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition"
+                                        title="WhatsApp Chat"
+                                      >
+                                        <MessageCircle className="h-4 w-4" />
+                                      </a>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Reminder & Next Schedule Card */}
+                          {selectedUserRecord && (
+                            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+                              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Schedule & Reminders</div>
+                              
+                              <div className="flex items-start gap-3">
+                                <div className="rounded-xl bg-amber-50 p-2 border border-amber-100 text-amber-600">
+                                  <Calendar className="h-5 w-5" />
+                                </div>
+                                <div className="flex-1">
+                                  <div className="text-xs text-slate-400 font-medium">Next Callback Date</div>
+                                  <div className="text-sm font-bold text-slate-900 mt-0.5">
+                                    {selectedUserRecord.followUpDate ? formatDate(selectedUserRecord.followUpDate) : "No callback scheduled"}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                                <span className="text-xs font-medium text-slate-500">Telegram Notification alerts</span>
+                                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                  selectedUserRecord.reminderEnabled
+                                    ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                                    : "bg-slate-100 text-slate-600 border border-slate-200"
+                                }`}>
+                                  <span className={`h-1.5 w-1.5 rounded-full ${selectedUserRecord.reminderEnabled ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`} />
+                                  {selectedUserRecord.reminderEnabled ? "Enabled" : "Disabled"}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Active/Current Remark Card */}
+                          {selectedUserRecord?.remark && (
+                            <div className="rounded-3xl border border-slate-200 bg-amber-50/40 p-5 shadow-sm space-y-2 border-dashed">
+                              <div className="text-xs font-bold text-amber-800 uppercase tracking-wider flex items-center gap-1.5">
+                                <FileText className="h-3.5 w-3.5" />
+                                Active Remark Note
+                              </div>
+                              <p className="text-sm text-slate-700 font-medium italic">
+                                "{selectedUserRecord.remark}"
+                              </p>
+                              <div className="text-[10px] text-slate-400 mt-2 font-medium">
+                                Last updated: {formatDate(selectedUserRecord.updatedAt)}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* RIGHT COLUMN: Chronological Activity logs (7 cols) */}
+                        <div className="md:col-span-7 space-y-6 border-t md:border-t-0 md:border-l md:border-slate-200/80 md:pl-6 pt-6 md:pt-0">
+                          
+                          {/* Section Title */}
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Interaction Activity Timeline</h4>
+                            </div>
+                            <span className="text-xs font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-2.5 py-0.5 rounded-full">
+                              {selectedUserLogs.length} events
+                            </span>
                           </div>
-                        )}
+
+                          {/* Timeline Body */}
+                          <div className="space-y-6">
+                            {selectedUserLogs.length === 0 ? (
+                              <div className="flex flex-col items-center justify-center h-72 text-slate-400 text-center px-4 bg-white rounded-3xl border border-slate-200/60 p-6 shadow-sm">
+                                <div className="rounded-full bg-slate-50 p-4 border border-slate-100 text-slate-300">
+                                  <Clock3 className="h-8 w-8 stroke-1" />
+                                </div>
+                                <p className="mt-4 text-sm font-semibold text-slate-700">No interaction history logs found</p>
+                                <p className="text-xs text-slate-500 mt-1 max-w-[280px]">
+                                  Any calls, callbacks, status changes, or comments logged by recovery agents will appear chronologically here.
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="relative border-l-2 border-slate-200 pl-6 ml-3 space-y-8 py-2">
+                                {selectedUserLogs.map((log, index) => {
+                                  const isFirst = index === 0;
+                                  return (
+                                    <div key={log.id} className="relative">
+                                      {/* Node circle */}
+                                      <span className={`absolute -left-[33px] top-1 flex h-4.5 w-4.5 items-center justify-center rounded-full ring-4 ring-slate-50 ${
+                                        isFirst ? "bg-cyan-600 ring-cyan-100" : "bg-slate-300"
+                                      }`}>
+                                        {isFirst && <span className="h-2 w-2 rounded-full bg-white animate-ping" />}
+                                      </span>
+
+                                      {/* Log Details Container */}
+                                      <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm space-y-3 hover:border-slate-300 transition duration-200">
+                                        <div className="flex items-center justify-between text-xs">
+                                          <div className="flex items-center gap-2">
+                                            <span className="font-bold text-slate-800">{log.updatedBy || "Agent"}</span>
+                                            <span className="text-slate-400">•</span>
+                                            <span className="text-slate-500 font-medium">{formatDate(log.updatedAt)}</span>
+                                          </div>
+                                          <StatusPill value={log.callStatus} />
+                                        </div>
+
+                                        {log.remark && (
+                                          <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-700 font-medium border border-slate-100">
+                                            {log.remark}
+                                          </div>
+                                        )}
+
+                                        {log.followUpDate && (
+                                          <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-3 py-1.5 w-fit">
+                                            <BellRing className="h-3.5 w-3.5 text-amber-600" />
+                                            <span>Scheduled Callback: {formatDate(log.followUpDate)}</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+
+                        </div>
+
                       </div>
-                      
+
                       {/* Drawer Footer */}
-                      <div className="border-t border-slate-100 p-6 bg-slate-50 flex justify-end">
+                      <div className="border-t border-slate-200 p-5 bg-white flex justify-end gap-3">
                         <button
                           onClick={() => setSelectedUserId(null)}
-                          className="rounded-2xl border border-slate-200 bg-white px-6 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
+                          className="rounded-2xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition active:scale-[0.98]"
                         >
-                          Close Timeline
+                          Close Case File
                         </button>
                       </div>
+
                     </div>
                   </div>
                 )}
@@ -2838,8 +3102,6 @@ function App() {
                     </div>
                   </div>
                 )}
-              </div>
-            )}
           </div>
         </main>
       </div>
