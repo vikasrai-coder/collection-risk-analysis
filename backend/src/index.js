@@ -6,7 +6,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { ensureSchema } from './utils/schema.js';
 import { getDatabaseStatus, query } from './utils/database.js';
-import { findUserByEmail, createUser, getAllUsers } from './utils/auth.js';
+import { findUserByEmail, createUser, getAllUsers, updateUserPassword } from './utils/auth.js';
 
 dotenv.config();
 
@@ -125,6 +125,29 @@ app.get('/api/auth/users', authenticateToken, requireAdmin, async (_req, res) =>
   try {
     const users = await getAllUsers();
     res.json(users);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/api/auth/reset-password', authenticateToken, requireAdmin, async (req, res) => {
+  const { email, password } = req.body || {};
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Email and password are required' });
+  }
+
+  try {
+    const existing = await findUserByEmail(email);
+    if (!existing) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const updated = await updateUserPassword({ email, password });
+    if (updated) {
+      res.json({ message: 'Password updated successfully' });
+    } else {
+      res.status(500).json({ message: 'Failed to update password' });
+    }
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

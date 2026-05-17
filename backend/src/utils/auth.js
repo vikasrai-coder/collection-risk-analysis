@@ -30,8 +30,8 @@ export async function findUserByEmail(email) {
         .eq('email', email.toLowerCase().trim())
         .maybeSingle();
 
-      if (!error && data) {
-        return data;
+      if (!error) {
+        return data; // Return data if found, or null if not found (don't fall back to local PG if query succeeded)
       }
     } catch (e) {
       console.error('Supabase findUser failed, falling back to local PG:', e);
@@ -39,11 +39,16 @@ export async function findUserByEmail(email) {
   }
 
   // Fallback to local PG
-  const res = await localPool.query(
-    'SELECT * FROM users WHERE LOWER(email) = LOWER($1)',
-    [email.trim()]
-  );
-  return res.rows[0] || null;
+  try {
+    const res = await localPool.query(
+      'SELECT * FROM users WHERE LOWER(email) = LOWER($1)',
+      [email.trim()]
+    );
+    return res.rows[0] || null;
+  } catch (err) {
+    console.error('Local PG findUserByEmail failed:', err.message);
+    return null;
+  }
 }
 
 export async function createUser({ email, password, role }) {
@@ -82,15 +87,20 @@ export async function createUser({ email, password, role }) {
   }
 
   if (!createdUser) {
-    const res = await localPool.query(
-      `INSERT INTO users (email, password_hash, role, is_active)
-       VALUES ($1, $2, $3, true)
-       ON CONFLICT (email)
-       DO UPDATE SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role
-       RETURNING *`,
-      [normalizedEmail, passwordHash, role]
-    );
-    createdUser = res.rows[0];
+    try {
+      const res = await localPool.query(
+        `INSERT INTO users (email, password_hash, role, is_active)
+         VALUES ($1, $2, $3, true)
+         ON CONFLICT (email)
+         DO UPDATE SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role
+         RETURNING *`,
+        [normalizedEmail, passwordHash, role]
+      );
+      createdUser = res.rows[0];
+    } catch (err) {
+      console.error('Local PG createUser failed:', err.message);
+      return null;
+    }
   }
 
   return createdUser;
@@ -104,16 +114,65 @@ export async function getAllUsers() {
         .select('id, email, role, is_active, created_at')
         .order('created_at', { ascending: false });
 
-      if (!error && data) {
-        return data;
+      if (!error) {
+        return data || [];
       }
     } catch (e) {
       console.error('Supabase getAllUsers failed, falling back to local PG:', e);
     }
   }
 
-  const res = await localPool.query(
-    'SELECT id, email, role, is_active, created_at FROM users ORDER BY created_at DESC'
-  );
-  return res.rows;
+  try {
+    const res = await localPool.query(
+      'SELECT id, email, role, is_active, created_at FROM users ORDER BY created_at DESC'
+    );
+    return res.rows;
+  } catch (err) {
+    console.error('Local PG getAllUsers failed:', err.message);
+    return [];
+  }
+}
+
+export async function updateUserPassword({ email, password }) {
+  const passwordHash = await bcrypt.hash(password, 10);
+  const normalizedEmail = email.toLowerCase().trim();
+
+  let updated = false;
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .update({ password_hash: passwordHash })
+        .eq('email', normalizedEmail)
+        .select();
+
+      if (!error && data && data.length > 0) {
+        updated = true;
+        // Mirror to local PG in the background
+        localPool.query(
+          `UPDATE users SET password_hash = $2 WHERE LOWER(email) = LOWER($1)`,
+          [normalizedEmail, passwordHash]
+        ).catch(() => {});
+      }
+    } catch (e) {
+      console.error('Supabase updateUserPassword failed, falling back to local PG:', e);
+    }
+  }
+
+  if (!updated) {
+    try {
+      const res = await localPool.query(
+        `UPDATE users SET password_hash = $2 WHERE LOWER(email) = LOWER($1) RETURNING *`,
+        [normalizedEmail, passwordHash]
+      );
+      if (res.rows.length > 0) {
+        updated = true;
+      }
+    } catch (err) {
+      console.error('Local PG updateUserPassword failed:', err.message);
+    }
+  }
+
+  return updated;
 }

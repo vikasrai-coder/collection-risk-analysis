@@ -29,7 +29,12 @@ export async function query(text, params) {
   // If this is a schema setup query, only run it locally for now 
   // (Supabase JS client doesn't support raw SQL)
   if (text.trim().toUpperCase().startsWith('CREATE TABLE')) {
-    return localPool.query(text, params);
+    try {
+      return await localPool.query(text, params);
+    } catch (err) {
+      console.error('Local PG schema setup failed:', err.message);
+      return { rows: [] };
+    }
   }
 
   // Handle standard state queries
@@ -52,7 +57,12 @@ export async function query(text, params) {
     }
     
     activeTarget = 'local';
-    return localPool.query(text, params);
+    try {
+      return await localPool.query(text, params);
+    } catch (err) {
+      console.error('Local PG state select failed:', err.message);
+      return { rows: [] };
+    }
   }
 
   // INSERT INTO app_state ... ON CONFLICT ...
@@ -80,11 +90,21 @@ export async function query(text, params) {
     }
     
     activeTarget = 'local';
-    return localPool.query(text, params);
+    try {
+      return await localPool.query(text, params);
+    } catch (err) {
+      console.error('Local PG state insert failed:', err.message);
+      return { ok: false, error: err.message };
+    }
   }
 
   // Default fallback for any other queries
-  return localPool.query(text, params);
+  try {
+    return await localPool.query(text, params);
+  } catch (err) {
+    console.error('Local PG fallback query failed:', err.message);
+    return { rows: [] };
+  }
 }
 
 export function getDatabaseStatus() {

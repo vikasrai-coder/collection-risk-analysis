@@ -41,7 +41,8 @@ async function runSQL(sql) {
 }
 
 const USERS_TO_SEED = [
-  { email: 'vikas.rai@kredmint.com', password: 'Kredmint@123', role: 'admin' },
+  { email: 'admin@kredmint.com', password: 'Admin@123', role: 'admin' },
+  { email: 'vikas.rai@kredmint.com', password: 'Kredmin@123', role: 'admin' },
   { email: 'gurudutt@kredmint.com', password: 'Kredmint@123', role: 'manager' },
   { email: 'praveen.chauhan@kredmint.com', password: 'Kredmint@123', role: 'manager' },
   { email: 'ritik@kredmint.com', password: 'Kredmint@123', role: 'manager' },

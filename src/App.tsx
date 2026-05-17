@@ -95,7 +95,7 @@ const HISTORY_KEY = "collection-risk-upload-history-v1";
 const DB_NAME = "collection-risk-db";
 const DB_VERSION = 1;
 const RECORDS_STORE = "app_state";
-const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "/api" : "http://localhost:3000");
+const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "" : "http://localhost:3000");
 const lenderWhitelist = [
   "Muthoot Fincorp Limited",
   "Zeal Holdings Private Limited",
@@ -415,6 +415,13 @@ function App() {
   const [usersList, setUsersList] = useState<Array<{ id: string; email: string; role: string; is_active: boolean; created_at: string }>>([]);
   const [usersLoading, setUsersLoading] = useState(false);
 
+  // Reset Password states
+  const [resettingUser, setResettingUser] = useState<string | null>(null);
+  const [resetPasswordVal, setResetPasswordVal] = useState("");
+  const [resetError, setResetError] = useState("");
+  const [resetSuccess, setResetSuccess] = useState("");
+  const [resetLoading, setResetLoading] = useState(false);
+
   // App core states
   const [activePage, setActivePage] = useState<Page>("dashboard");
   const [records, setRecords] = useState<CollectionRecord[]>([]);
@@ -511,6 +518,41 @@ function App() {
       setCreateError(err.message || "Failed to create user.");
     } finally {
       setCreateLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetError("");
+    setResetSuccess("");
+    if (!resettingUser || !resetPasswordVal) {
+      setResetError("Email and new password are required.");
+      return;
+    }
+    setResetLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/reset-password`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({ email: resettingUser, password: resetPasswordVal }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to reset password");
+      }
+      setResetSuccess(`Password updated successfully for ${resettingUser}`);
+      setResetPasswordVal("");
+      setTimeout(() => {
+        setResettingUser(null);
+        setResetSuccess("");
+      }, 3000);
+    } catch (err: any) {
+      setResetError(err.message || "Failed to reset password.");
+    } finally {
+      setResetLoading(false);
     }
   };
 
@@ -1266,15 +1308,6 @@ function App() {
                 Sign Out
               </button>
             </div>
-            
-            <p className="text-sm text-slate-400">Lenders</p>
-            <div className="mt-3 space-y-2">
-              {lenderWhitelist.map((lender) => (
-                <div key={lender} className="rounded-xl bg-white/5 px-3 py-2 text-sm text-slate-200">
-                  {lender}
-                </div>
-              ))}
-            </div>
           </div>
         </aside>
 
@@ -1509,33 +1542,55 @@ function App() {
                               <td className="py-3">{group.lender}</td>
                               <td className="py-3">{group.anchor || "-"}</td>
                               <td className="py-3">
-                                <div className="flex items-start gap-3">
-                                  <div>
-                                    <div>{group.mobile || "-"}</div>
-                                    <div className="text-xs text-slate-500">{group.alternateNumber || ""}</div>
-                                  </div>
-                                  <div className="flex gap-2">
-                                    {group.mobile ? (
-                                      <a
-                                        href={`tel:${group.mobile}`}
-                                        className="rounded-xl border border-slate-200 p-2 text-slate-700"
-                                        title="Call"
-                                      >
-                                        <Phone className="h-4 w-4" />
-                                      </a>
-                                    ) : null}
-                                    {group.mobile ? (
-                                      <a
-                                        href={`https://wa.me/91${group.mobile}`}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="rounded-xl border border-slate-200 p-2 text-emerald-700"
-                                        title="WhatsApp"
-                                      >
-                                        <MessageCircle className="h-4 w-4" />
-                                      </a>
-                                    ) : null}
-                                  </div>
+                                <div className="space-y-2">
+                                  {group.mobile ? (
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-semibold text-slate-900">{group.mobile}</span>
+                                      <div className="flex gap-1">
+                                        <a
+                                          href={`tel:${group.mobile}`}
+                                          className="rounded-lg border border-slate-200 p-1 text-slate-700 hover:bg-slate-50 transition"
+                                          title="Call Primary"
+                                        >
+                                          <Phone className="h-3.5 w-3.5" />
+                                        </a>
+                                        <a
+                                          href={`https://wa.me/91${group.mobile}`}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="rounded-lg border border-slate-200 p-1 text-emerald-700 hover:bg-emerald-50 transition"
+                                          title="WhatsApp Primary"
+                                        >
+                                          <MessageCircle className="h-3.5 w-3.5" />
+                                        </a>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400">-</span>
+                                  )}
+                                  {group.alternateNumber ? (
+                                    <div className="flex items-center gap-2 border-t border-slate-100 pt-1.5">
+                                      <span className="text-xs text-slate-500">{group.alternateNumber}</span>
+                                      <div className="flex gap-1">
+                                        <a
+                                          href={`tel:${group.alternateNumber}`}
+                                          className="rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-slate-50 transition"
+                                          title="Call Alternate"
+                                        >
+                                          <Phone className="h-3.5 w-3.5" />
+                                        </a>
+                                        <a
+                                          href={`https://wa.me/91${group.alternateNumber}`}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="rounded-lg border border-slate-200 p-1 text-emerald-600 hover:bg-emerald-50 transition"
+                                          title="WhatsApp Alternate"
+                                        >
+                                          <MessageCircle className="h-3.5 w-3.5" />
+                                        </a>
+                                      </div>
+                                    </div>
+                                  ) : null}
                                 </div>
                               </td>
                               <td className="py-3">
@@ -1679,31 +1734,56 @@ function App() {
                             </div>
                           </div>
 
-                          <div className="mt-3 flex items-center justify-between rounded-xl bg-slate-50 p-3">
-                            <div>
-                              <div className="text-sm">{group.mobile || "-"}</div>
-                              <div className="text-xs text-slate-500">{group.alternateNumber || ""}</div>
-                            </div>
-                            <div className="flex gap-2">
-                              {group.mobile ? (
-                                <a
-                                  href={`tel:${group.mobile}`}
-                                  className="rounded-xl border border-slate-200 bg-white p-2 text-slate-700"
-                                >
-                                  <Phone className="h-4 w-4" />
-                                </a>
-                              ) : null}
-                              {group.mobile ? (
-                                <a
-                                  href={`https://wa.me/91${group.mobile}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="rounded-xl border border-slate-200 bg-white p-2 text-emerald-700"
-                                >
-                                  <MessageCircle className="h-4 w-4" />
-                                </a>
-                              ) : null}
-                            </div>
+                          <div className="mt-3 space-y-2 rounded-xl bg-slate-50 p-3">
+                            {group.mobile ? (
+                              <div className="flex items-center justify-between">
+                                <div className="text-sm font-semibold">{group.mobile}</div>
+                                <div className="flex gap-2">
+                                  <a
+                                    href={`tel:${group.mobile}`}
+                                    className="rounded-xl border border-slate-200 bg-white p-2 text-slate-700 hover:bg-slate-100 transition"
+                                    title="Call Primary"
+                                  >
+                                    <Phone className="h-4 w-4" />
+                                  </a>
+                                  <a
+                                    href={`https://wa.me/91${group.mobile}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="rounded-xl border border-slate-200 bg-white p-2 text-emerald-700 hover:bg-emerald-50 transition"
+                                    title="WhatsApp Primary"
+                                  >
+                                    <MessageCircle className="h-4 w-4" />
+                                  </a>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-sm text-slate-400">-</div>
+                            )}
+
+                            {group.alternateNumber ? (
+                              <div className="flex items-center justify-between border-t border-slate-200/50 pt-2">
+                                <div className="text-xs text-slate-500">{group.alternateNumber} (Alt)</div>
+                                <div className="flex gap-2">
+                                  <a
+                                    href={`tel:${group.alternateNumber}`}
+                                    className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-100 transition"
+                                    title="Call Alternate"
+                                  >
+                                    <Phone className="h-4 w-4" />
+                                  </a>
+                                  <a
+                                    href={`https://wa.me/91${group.alternateNumber}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="rounded-xl border border-slate-200 bg-white p-2 text-emerald-600 hover:bg-emerald-50 transition"
+                                    title="WhatsApp Alternate"
+                                  >
+                                    <MessageCircle className="h-4 w-4" />
+                                  </a>
+                                </div>
+                              </div>
+                            ) : null}
                           </div>
 
                           {editing ? (
@@ -1798,8 +1878,56 @@ function App() {
                             <td className="py-3 font-semibold">{customer.userId}</td>
                             <td className="py-3">{customer.customerName || "-"}</td>
                             <td className="py-3">
-                              <div>{customer.mobile || "-"}</div>
-                              <div className="text-xs text-slate-500">{customer.alternateNumber || ""}</div>
+                              <div className="space-y-1">
+                                {customer.mobile ? (
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold text-slate-900">{customer.mobile}</span>
+                                    <div className="flex gap-1">
+                                      <a
+                                        href={`tel:${customer.mobile}`}
+                                        className="rounded border border-slate-200 p-0.5 text-slate-700 hover:bg-slate-50 transition"
+                                        title="Call Primary"
+                                      >
+                                        <Phone className="h-3 w-3" />
+                                      </a>
+                                      <a
+                                        href={`https://wa.me/91${customer.mobile}`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="rounded border border-slate-200 p-0.5 text-emerald-700 hover:bg-emerald-50 transition"
+                                        title="WhatsApp Primary"
+                                      >
+                                        <MessageCircle className="h-3 w-3" />
+                                      </a>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400">-</span>
+                                )}
+                                {customer.alternateNumber ? (
+                                  <div className="flex items-center gap-2 border-t border-slate-100 pt-1 mt-0.5">
+                                    <span className="text-xs text-slate-500">{customer.alternateNumber}</span>
+                                    <div className="flex gap-1">
+                                      <a
+                                        href={`tel:${customer.alternateNumber}`}
+                                        className="rounded border border-slate-200 p-0.5 text-slate-500 hover:bg-slate-50 transition"
+                                        title="Call Alternate"
+                                      >
+                                        <Phone className="h-3 w-3" />
+                                      </a>
+                                      <a
+                                        href={`https://wa.me/91${customer.alternateNumber}`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="rounded border border-slate-200 p-0.5 text-emerald-600 hover:bg-emerald-50 transition"
+                                        title="WhatsApp Alternate"
+                                      >
+                                        <MessageCircle className="h-3 w-3" />
+                                      </a>
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
                             </td>
                             <td className="py-3">{customer.anchor || "-"}</td>
                             <td className="py-3">{formatCurrency(customer.totalLoanAmount)}</td>
@@ -2012,6 +2140,7 @@ function App() {
                                 <th className="pb-3 font-medium">Role</th>
                                 <th className="pb-3 font-medium">Status</th>
                                 <th className="pb-3 font-medium">Created At</th>
+                                <th className="pb-3 font-medium text-right">Actions</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -2033,6 +2162,19 @@ function App() {
                                     </span>
                                   </td>
                                   <td className="py-3 text-slate-500">{formatDate(usr.created_at)}</td>
+                                  <td className="py-3 text-right">
+                                    <button
+                                      onClick={() => {
+                                        setResettingUser(usr.email);
+                                        setResetPasswordVal("");
+                                        setResetError("");
+                                        setResetSuccess("");
+                                      }}
+                                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
+                                    >
+                                      Reset PW
+                                    </button>
+                                  </td>
                                 </tr>
                               ))}
                             </tbody>
@@ -2042,6 +2184,72 @@ function App() {
                     </Panel>
                   </div>
                 </div>
+
+                {resettingUser && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+                    <div className="w-full max-w-md overflow-hidden rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
+                        <div>
+                          <h3 className="text-lg font-bold text-slate-900">Reset Operator Password</h3>
+                          <p className="text-xs text-slate-500 mt-0.5">Updating credentials for {resettingUser}</p>
+                        </div>
+                        <button
+                          onClick={() => setResettingUser(null)}
+                          className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition"
+                        >
+                          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+
+                      <form onSubmit={handleResetPassword} className="space-y-4">
+                        {resetError && (
+                          <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
+                            {resetError}
+                          </div>
+                        )}
+                        {resetSuccess && (
+                          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
+                            {resetSuccess}
+                          </div>
+                        )}
+
+                        <div className="space-y-2">
+                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                            New Password
+                          </label>
+                          <input
+                            type="password"
+                            required
+                            autoFocus
+                            value={resetPasswordVal}
+                            onChange={(e) => setResetPasswordVal(e.target.value)}
+                            placeholder="Enter at least 6 characters"
+                            className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition"
+                          />
+                        </div>
+
+                        <div className="flex gap-3 pt-2">
+                          <button
+                            type="button"
+                            onClick={() => setResettingUser(null)}
+                            className="flex-1 rounded-2xl border border-slate-200 py-3 font-semibold text-slate-700 hover:bg-slate-50 transition"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={resetLoading}
+                            className="flex-1 rounded-2xl bg-slate-950 py-3 font-semibold text-white shadow-lg transition hover:bg-slate-800 disabled:bg-slate-300"
+                          >
+                            {resetLoading ? "Updating..." : "Update Password"}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

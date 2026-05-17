@@ -37,3 +37,5 @@ frontend-dev.log
 sync_debug.log
 bun.lockb
 package-lock.json
+.vercel
+.env*.local
