@@ -91,13 +91,19 @@ app.post('/api/state', async (req, res) => {
   }
 });
 
-ensureSchema()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`Collection Risk backend running on ${PORT}`);
+if (process.env.NODE_ENV !== 'production' || process.env.VERCEL) {
+  ensureSchema()
+    .then(() => {
+      if (!process.env.VERCEL) {
+        app.listen(PORT, () => {
+          console.log(`Collection Risk backend running on ${PORT}`);
+        });
+      }
+    })
+    .catch((error) => {
+      console.error('Backend startup failed:', error.message);
+      if (!process.env.VERCEL) process.exit(1);
     });
-  })
-  .catch((error) => {
-    console.error('Backend startup failed:', error.message);
-    process.exit(1);
-  });
+}
+
+export default app;

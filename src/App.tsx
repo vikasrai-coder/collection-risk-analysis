@@ -90,7 +90,7 @@ const HISTORY_KEY = "collection-risk-upload-history-v1";
 const DB_NAME = "collection-risk-db";
 const DB_VERSION = 1;
 const RECORDS_STORE = "app_state";
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
+const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "/api" : "http://localhost:3000");
 const lenderWhitelist = [
   "Muthoot Fincorp Limited",
   "Zeal Holdings Private Limited",
