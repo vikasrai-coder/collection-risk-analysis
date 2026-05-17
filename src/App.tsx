@@ -16,9 +16,14 @@ import {
   Search,
   Upload,
   Users,
+  Lock,
+  LogOut,
+  Plus,
+  Key,
+  Mail,
 } from "lucide-react";
 
-type Page = "dashboard" | "followup" | "records" | "upload";
+type Page = "dashboard" | "followup" | "records" | "upload" | "users";
 
 type CollectionRecord = {
   id: string;
@@ -323,8 +328,15 @@ async function persistRecords(records: CollectionRecord[]) {
   });
 }
 
+function getAuthHeader() {
+  const token = localStorage.getItem("collection-risk-token");
+  return token ? { "Authorization": `Bearer ${token}` } : {};
+}
+
 async function fetchBackendState() {
-  const response = await fetch(`${API_BASE_URL}/api/state`);
+  const response = await fetch(`${API_BASE_URL}/api/state`, {
+    headers: getAuthHeader()
+  });
   if (!response.ok) {
     throw new Error(`Backend sync failed: ${response.status}`);
   }
@@ -336,6 +348,7 @@ async function pushBackendState(records: CollectionRecord[], history: UploadHist
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...getAuthHeader()
     },
     body: JSON.stringify({ records, history }),
   });
@@ -379,6 +392,30 @@ function makeFollowupGroupKey(record: CollectionRecord) {
 }
 
 function App() {
+  // Authentication states
+  const [user, setUser] = useState<{ id: string; email: string; role: "admin" | "manager" } | null>(() => {
+    const stored = localStorage.getItem("collection-risk-user");
+    return stored ? JSON.parse(stored) : null;
+  });
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem("collection-risk-token"));
+
+  // Login states
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+
+  // User management states (Admin only)
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newRole, setNewRole] = useState<"manager" | "admin">("manager");
+  const [createError, setCreateError] = useState("");
+  const [createSuccess, setCreateSuccess] = useState("");
+  const [createLoading, setCreateLoading] = useState(false);
+  const [usersList, setUsersList] = useState<Array<{ id: string; email: string; role: string; is_active: boolean; created_at: string }>>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+
+  // App core states
   const [activePage, setActivePage] = useState<Page>("dashboard");
   const [records, setRecords] = useState<CollectionRecord[]>([]);
   const [uploadHistory, setUploadHistory] = useState<UploadHistory[]>([]);
@@ -394,6 +431,112 @@ function App() {
   const [recordsReady, setRecordsReady] = useState(false);
   const syncTimerRef = useRef<number | null>(null);
   const draftsRef = useRef<Record<string, Draft>>({});
+
+  const handleLogout = () => {
+    localStorage.removeItem("collection-risk-token");
+    localStorage.removeItem("collection-risk-user");
+    setToken(null);
+    setUser(null);
+    setActivePage("dashboard");
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError("");
+    if (!loginEmail || !loginPassword) {
+      setLoginError("Please enter both email and password.");
+      return;
+    }
+    setLoginLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to log in");
+      }
+      localStorage.setItem("collection-risk-token", data.token);
+      localStorage.setItem("collection-risk-user", JSON.stringify(data.user));
+      setToken(data.token);
+      setUser(data.user);
+      setLoginEmail("");
+      setLoginPassword("");
+      
+      // Fetch fresh backend state after logging in
+      const state = await fetchBackendState();
+      if (Array.isArray(state.records) && state.records.length) {
+        setRecords(restrictToAllowedLenders(state.records));
+      }
+      if (Array.isArray(state.history) && state.history.length) {
+        setUploadHistory(state.history);
+      }
+    } catch (err: any) {
+      setLoginError(err.message || "Something went wrong. Please check your credentials.");
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateError("");
+    setCreateSuccess("");
+    if (!newEmail || !newPassword) {
+      setCreateError("Email and password are required.");
+      return;
+    }
+    setCreateLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/create-user`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({ email: newEmail, password: newPassword, role: newRole }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to create user");
+      }
+      setCreateSuccess(`User created successfully: ${newEmail}`);
+      setNewEmail("");
+      setNewPassword("");
+      setNewRole("manager");
+      fetchUsers();
+    } catch (err: any) {
+      setCreateError(err.message || "Failed to create user.");
+    } finally {
+      setCreateLoading(false);
+    }
+  };
+
+  const fetchUsers = async () => {
+    if (!token || user?.role !== "admin") return;
+    setUsersLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/users`, {
+        headers: { "Authorization": `Bearer ${token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setUsersList(data);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setUsersLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activePage === "users" && user?.role === "admin") {
+      fetchUsers();
+    }
+  }, [activePage, user]);
 
   useEffect(() => {
     readPersistedRecords()
@@ -990,7 +1133,92 @@ function App() {
     { key: "followup", label: "Daily Follow-up", icon: PhoneCall },
     { key: "records", label: "Records", icon: FileSpreadsheet },
     { key: "upload", label: "Upload", icon: Upload },
+    ...(user?.role === "admin" ? [{ key: "users" as Page, label: "Users", icon: Users }] : []),
   ];
+
+  if (!token || !user) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-12 relative overflow-hidden text-slate-100">
+        {/* Animated background highlights */}
+        <div className="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] rounded-full bg-cyan-500/10 blur-[120px]" />
+        <div className="absolute bottom-[-20%] right-[-20%] w-[60%] h-[60%] rounded-full bg-emerald-500/10 blur-[120px]" />
+        
+        <div className="w-full max-w-md space-y-8 relative z-10">
+          <div className="text-center">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-cyan-400 text-slate-950 shadow-2xl shadow-cyan-400/20">
+              <Database className="h-8 w-8 animate-pulse" />
+            </div>
+            <h2 className="mt-6 text-3xl font-extrabold tracking-tight text-white">
+              Collection Risk Console
+            </h2>
+            <p className="mt-2 text-sm text-slate-400">
+              Please sign in to access portfolio controls
+            </p>
+          </div>
+
+          <div className="rounded-3xl bg-slate-900/60 border border-white/10 p-8 shadow-2xl backdrop-blur-xl">
+            <form onSubmit={handleLogin} className="space-y-6">
+              {loginError && (
+                <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400 flex items-center gap-2">
+                  <Lock className="h-4 w-4 shrink-0" />
+                  <span>{loginError}</span>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                  <Mail className="h-4 w-4 text-cyan-400" />
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  placeholder="name@kredmint.com"
+                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-slate-500 outline-none transition focus:border-cyan-400 focus:bg-white/10 focus:ring-1 focus:ring-cyan-400"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                  <Key className="h-4 w-4 text-cyan-400" />
+                  Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-slate-500 outline-none transition focus:border-cyan-400 focus:bg-white/10 focus:ring-1 focus:ring-cyan-400"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loginLoading}
+                className="w-full rounded-2xl bg-cyan-400 py-3.5 font-bold text-slate-950 shadow-lg shadow-cyan-400/20 transition hover:bg-cyan-300 hover:shadow-cyan-400/30 active:scale-[0.98] disabled:bg-slate-700 disabled:text-slate-500 flex items-center justify-center gap-2"
+              >
+                {loginLoading ? (
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-950 border-t-transparent" />
+                ) : (
+                  <>
+                    <Lock className="h-4 w-4" />
+                    Sign In
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
+          
+          <div className="text-center text-xs text-slate-500">
+            Powered by Supabase Security Protocol • Dual Synchronized DB
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-950">
@@ -1026,6 +1254,19 @@ function App() {
           </nav>
 
           <div className="border-t border-white/10 px-5 py-4">
+            <div className="mb-4 rounded-2xl bg-white/5 p-3.5 text-sm text-slate-200">
+              <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Logged in as</p>
+              <p className="mt-1 font-semibold truncate" title={user.email}>{user.email}</p>
+              <p className="text-xs text-cyan-400 capitalize mt-0.5">{user.role}</p>
+              <button
+                onClick={handleLogout}
+                className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-white/10 py-2 text-xs font-semibold text-white transition hover:bg-rose-600 hover:text-white"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                Sign Out
+              </button>
+            </div>
+            
             <p className="text-sm text-slate-400">Lenders</p>
             <div className="mt-3 space-y-2">
               {lenderWhitelist.map((lender) => (
@@ -1686,6 +1927,122 @@ function App() {
                   </div>
                 </Panel>
               </>
+            )}
+
+            {activePage === "users" && user?.role === "admin" && (
+              <div className="space-y-6">
+                <div className="grid gap-6 lg:grid-cols-3">
+                  <div className="lg:col-span-1">
+                    <Panel title="Create New Operator" subtitle="Register a new admin or manager">
+                      <form onSubmit={handleCreateUser} className="space-y-4">
+                        {createError && (
+                          <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
+                            {createError}
+                          </div>
+                        )}
+                        {createSuccess && (
+                          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
+                            {createSuccess}
+                          </div>
+                        )}
+
+                        <div className="space-y-2">
+                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                            Email Address
+                          </label>
+                          <input
+                            type="email"
+                            required
+                            value={newEmail}
+                            onChange={(e) => setNewEmail(e.target.value)}
+                            placeholder="user@kredmint.com"
+                            className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                            Password
+                          </label>
+                          <input
+                            type="password"
+                            required
+                            value={newPassword}
+                            onChange={(e) => setNewPassword(e.target.value)}
+                            placeholder="Min 6 characters"
+                            className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                            Role
+                          </label>
+                          <select
+                            value={newRole}
+                            onChange={(e) => setNewRole(e.target.value as any)}
+                            className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+                          >
+                            <option value="manager">Manager</option>
+                            <option value="admin">Admin</option>
+                          </select>
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={createLoading}
+                          className="w-full rounded-2xl bg-slate-950 py-3 font-semibold text-white shadow-lg transition hover:bg-slate-800 disabled:bg-slate-300"
+                        >
+                          {createLoading ? "Creating..." : "Create User"}
+                        </button>
+                      </form>
+                    </Panel>
+                  </div>
+
+                  <div className="lg:col-span-2">
+                    <Panel title="Operator Registry" subtitle="All registered system accounts">
+                      {usersLoading ? (
+                        <div className="py-8 text-center text-slate-500">Loading operators...</div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full text-sm">
+                            <thead className="text-left text-slate-500">
+                              <tr>
+                                <th className="pb-3 font-medium">Email</th>
+                                <th className="pb-3 font-medium">Role</th>
+                                <th className="pb-3 font-medium">Status</th>
+                                <th className="pb-3 font-medium">Created At</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {usersList.map((usr) => (
+                                <tr key={usr.id} className="border-t border-slate-100">
+                                  <td className="py-3 font-semibold">{usr.email}</td>
+                                  <td className="py-3">
+                                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                      usr.role === 'admin' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'
+                                    }`}>
+                                      {usr.role}
+                                    </span>
+                                  </td>
+                                  <td className="py-3">
+                                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                      usr.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-800'
+                                    }`}>
+                                      {usr.is_active ? 'Active' : 'Suspended'}
+                                    </span>
+                                  </td>
+                                  <td className="py-3 text-slate-500">{formatDate(usr.created_at)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </Panel>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         </main>
