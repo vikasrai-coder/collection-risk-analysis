@@ -60,6 +60,25 @@ type UploadHistory = {
   message?: string;
 };
 
+type InteractionHistoryItem = {
+  id: string;
+  loanId: string;
+  userId: string;
+  customerName: string;
+  callStatus: string;
+  remark: string;
+  followUpDate: string;
+  updatedAt: string;
+  updatedBy: string;
+};
+
+type TelegramSettings = {
+  isEnabled: boolean;
+  botToken: string;
+  chatId: string;
+  agentName: string;
+};
+
 type Draft = {
   customerName: string;
   mobile: string;
@@ -343,14 +362,19 @@ async function fetchBackendState() {
   return response.json();
 }
 
-async function pushBackendState(records: CollectionRecord[], history: UploadHistory[]) {
+async function pushBackendState(
+  records: CollectionRecord[],
+  history: UploadHistory[],
+  interaction_logs: InteractionHistoryItem[],
+  telegram_settings: TelegramSettings
+) {
   const response = await fetch(`${API_BASE_URL}/api/state`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...getAuthHeader()
     },
-    body: JSON.stringify({ records, history }),
+    body: JSON.stringify({ records, history, interaction_logs, telegram_settings }),
   });
 
   if (!response.ok) {
@@ -438,6 +462,26 @@ function App() {
   const [recordsReady, setRecordsReady] = useState(false);
   const syncTimerRef = useRef<number | null>(null);
   const draftsRef = useRef<Record<string, Draft>>({});
+
+  // New States for chronological log, telegram setup, and selected user view
+  const [interactionLogs, setInteractionLogs] = useState<InteractionHistoryItem[]>([]);
+  const [telegramSettings, setTelegramSettings] = useState<TelegramSettings>({
+    isEnabled: false,
+    botToken: "",
+    chatId: "",
+    agentName: "",
+  });
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  
+  // Telegram testing states
+  const [telegramTestMessage, setTelegramTestMessage] = useState("");
+  const [telegramTestSuccess, setTelegramTestSuccess] = useState("");
+  const [telegramTestError, setTelegramTestError] = useState("");
+  const [telegramTestLoading, setTelegramTestLoading] = useState(false);
+  const [telegramSaveSuccess, setTelegramSaveSuccess] = useState("");
+
+  // Agent Performance Dashboard state
+  const [selectedPerformanceAgent, setSelectedPerformanceAgent] = useState<string>("All Agents");
 
   const handleLogout = () => {
     localStorage.removeItem("collection-risk-token");
@@ -556,6 +600,64 @@ function App() {
     }
   };
 
+  const handleSaveTelegramSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTelegramSaveSuccess("");
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/state`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeader()
+        },
+        body: JSON.stringify({
+          records,
+          history: uploadHistory,
+          interaction_logs: interactionLogs,
+          telegram_settings: telegramSettings
+        }),
+      });
+      if (!response.ok) throw new Error("Failed to save Telegram settings to database.");
+      setTelegramSaveSuccess("Telegram Alert settings saved successfully!");
+      setTimeout(() => setTelegramSaveSuccess(""), 3000);
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || "Failed to save Telegram settings.");
+    }
+  };
+
+  const handleSendTelegramTest = async () => {
+    setTelegramTestSuccess("");
+    setTelegramTestError("");
+    if (!telegramSettings.botToken || !telegramSettings.chatId) {
+      setTelegramTestError("Please provide Bot Token and Chat ID first.");
+      return;
+    }
+    setTelegramTestLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/reminders/send-test`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeader()
+        },
+        body: JSON.stringify({
+          botToken: telegramSettings.botToken,
+          chatId: telegramSettings.chatId,
+          message: telegramTestMessage || undefined
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Failed to dispatch Telegram message");
+      setTelegramTestSuccess("🔔 Success! Telegram test notification dispatched.");
+      setTelegramTestMessage("");
+    } catch (err: any) {
+      setTelegramTestError(err.message || "Failed to dispatch Telegram notification.");
+    } finally {
+      setTelegramTestLoading(false);
+    }
+  };
+
   const fetchUsers = async () => {
     if (!token || user?.role !== "admin") return;
     setUsersLoading(true);
@@ -597,6 +699,12 @@ function App() {
         if (Array.isArray(state.history) && state.history.length) {
           setUploadHistory(state.history);
         }
+        if (Array.isArray(state.interaction_logs)) {
+          setInteractionLogs(state.interaction_logs);
+        }
+        if (state.telegram_settings) {
+          setTelegramSettings(state.telegram_settings);
+        }
       })
       .catch(() => {});
   }, []);
@@ -618,9 +726,9 @@ function App() {
       window.clearTimeout(syncTimerRef.current);
     }
     syncTimerRef.current = window.setTimeout(() => {
-      pushBackendState(records, uploadHistory).catch(() => {});
+      pushBackendState(records, uploadHistory, interactionLogs, telegramSettings).catch(() => {});
     }, 700);
-  }, [records, uploadHistory, recordsReady]);
+  }, [records, uploadHistory, interactionLogs, telegramSettings, recordsReady]);
 
   useEffect(() => {
     draftsRef.current = drafts;
@@ -730,6 +838,65 @@ function App() {
       customers: new Set(filteredRecords.map((record) => record.userId)).size,
     };
   }, [filteredRecords]);
+
+  const distinctAgents = useMemo(() => {
+    const agents = new Set<string>();
+    interactionLogs.forEach(log => {
+      if (log.updatedBy) agents.add(log.updatedBy);
+    });
+    agents.add("vikas.rai@kredmint.com");
+    agents.add("admin@kredmint.com");
+    if (user?.email) agents.add(user.email);
+    return Array.from(agents);
+  }, [interactionLogs, user]);
+
+  const agentClosureStats = useMemo(() => {
+    const agentLogs = selectedPerformanceAgent === "All Agents"
+      ? interactionLogs
+      : interactionLogs.filter(log => log.updatedBy === selectedPerformanceAgent);
+
+    const touchedLoanIds = new Set(agentLogs.map(log => log.loanId));
+    const agentRecords = records.filter(r => touchedLoanIds.has(r.loanId));
+
+    const closedCases = agentLogs.filter(log => log.callStatus === "Payment Done");
+    const uniqueClosedLoanIds = new Set(closedCases.map(c => c.loanId));
+    const uniqueClosedRecords = records.filter(r => uniqueClosedLoanIds.has(r.loanId));
+
+    const totalAssignedCount = agentRecords.length;
+    const totalClosedCount = uniqueClosedRecords.length;
+    
+    const totalCollectedAmount = uniqueClosedRecords.reduce((sum, r) => sum + r.defaultAmount, 0);
+    
+    const remainingRecords = agentRecords.filter(r => !uniqueClosedLoanIds.has(r.loanId));
+    const pendingExposureAmount = remainingRecords.reduce((sum, r) => sum + r.defaultAmount, 0);
+
+    const totalFollowupsMade = agentLogs.length;
+
+    const efficiencyRate = totalAssignedCount > 0
+      ? Math.round((totalClosedCount / totalAssignedCount) * 100)
+      : 0;
+
+    return {
+      totalAssignedCount,
+      totalClosedCount,
+      totalCollectedAmount,
+      pendingExposureAmount,
+      totalFollowupsMade,
+      efficiencyRate
+    };
+  }, [selectedPerformanceAgent, interactionLogs, records]);
+
+  const selectedUserLogs = useMemo(() => {
+    if (!selectedUserId) return [];
+    return interactionLogs.filter(
+      (log) => log.userId === selectedUserId || log.loanId === selectedUserId
+    );
+  }, [selectedUserId, interactionLogs]);
+
+  const selectedUserRecord = useMemo(() => {
+    if (!selectedUserId) return null;
+    return records.find((r) => r.userId === selectedUserId || r.loanId === selectedUserId);
+  }, [selectedUserId, records]);
 
   const statusBreakdown = useMemo(() => {
     const source = new Map<string, number>();
@@ -1062,6 +1229,8 @@ function App() {
     const draft = drafts[recordId];
     if (!draft) return;
 
+    let updatedRecord: CollectionRecord | null = null;
+
     setRecords((current) =>
       current.map((record) => {
         if (record.id !== recordId) return record;
@@ -1069,7 +1238,7 @@ function App() {
 
         const paymentDone = draft.callStatus === "Payment Done";
 
-        return {
+        updatedRecord = {
           ...record,
           customerName: draft.customerName,
           mobile: draft.mobile,
@@ -1081,8 +1250,25 @@ function App() {
           reminderEnabled: paymentDone ? false : draft.reminderEnabled,
           updatedAt: new Date().toISOString(),
         };
+        return updatedRecord;
       }),
     );
+
+    if (updatedRecord) {
+      const rec = updatedRecord as CollectionRecord;
+      const newLog: InteractionHistoryItem = {
+        id: Math.random().toString(36).substring(2, 9),
+        loanId: rec.loanId,
+        userId: rec.userId,
+        customerName: rec.customerName,
+        callStatus: rec.callStatus,
+        remark: rec.remark,
+        followUpDate: rec.followUpDate,
+        updatedAt: rec.updatedAt,
+        updatedBy: user?.email || "Agent",
+      };
+      setInteractionLogs((prev) => [newLog, ...prev]);
+    }
 
     setEditingId("");
   }
@@ -1091,13 +1277,16 @@ function App() {
     const draft = draftsRef.current[groupKey];
     if (!draft) return;
 
+    const newLogs: InteractionHistoryItem[] = [];
+    const timestamp = new Date().toISOString();
+
     setRecords((current) =>
       current.map((record) => {
         if (!sourceIds.includes(record.id)) return record;
         if (isLocked(record)) return record;
 
         const paymentDone = draft.callStatus === "Payment Done";
-        return {
+        const updated = {
           ...record,
           customerName: draft.customerName,
           mobile: draft.mobile,
@@ -1107,10 +1296,28 @@ function App() {
           remark: paymentDone ? "Payment Done" : draft.remark,
           followUpDate: paymentDone ? "" : draft.followUpDate,
           reminderEnabled: paymentDone ? false : draft.reminderEnabled || !!draft.followUpDate,
-          updatedAt: new Date().toISOString(),
+          updatedAt: timestamp,
         };
+
+        newLogs.push({
+          id: Math.random().toString(36).substring(2, 9),
+          loanId: updated.loanId,
+          userId: updated.userId,
+          customerName: updated.customerName,
+          callStatus: updated.callStatus,
+          remark: updated.remark,
+          followUpDate: updated.followUpDate,
+          updatedAt: timestamp,
+          updatedBy: user?.email || "Agent",
+        });
+
+        return updated;
       }),
     );
+
+    if (newLogs.length) {
+      setInteractionLogs((prev) => [...newLogs, ...prev]);
+    }
   }
 
   function beginFollowupEdit(group: FollowupGroup) {
@@ -1375,6 +1582,115 @@ function App() {
                   <MetricCard icon={BellRing} label="Reminders" value={String(summary.remindersCount)} />
                 </section>
 
+                {/* Agent Performance & Closure Efficiency Analytics Suite */}
+                <Panel title="📈 Agent Performance & Case Closure Analytics" subtitle="Real-time collection closure rates and recovery efficiency reports">
+                  <div className="space-y-6">
+                    {/* Agent Selection Filter */}
+                    <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-800">Select Collection Officer</div>
+                        <p className="text-xs text-slate-500 mt-0.5">Filter the closure metrics below by individual recovery agents</p>
+                      </div>
+                      <div className="w-full max-w-xs">
+                        <select
+                          value={selectedPerformanceAgent}
+                          onChange={(e) => setSelectedPerformanceAgent(e.target.value)}
+                          className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none shadow-sm focus:border-cyan-500 transition"
+                        >
+                          <option value="All Agents">All Agents (Total Suite)</option>
+                          {distinctAgents.map((ag) => (
+                            <option key={ag} value={ag}>{ag}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Performance Metrics Cards */}
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      
+                      {/* Case Closure Rate Circular Progress */}
+                      <div className="flex items-center gap-4 bg-slate-50 border border-slate-200/60 rounded-2xl p-5">
+                        <div className="relative flex items-center justify-center h-16 w-16">
+                          <svg className="w-16 h-16 transform -rotate-90">
+                            <circle
+                              cx="32"
+                              cy="32"
+                              r="26"
+                              stroke="currentColor"
+                              strokeWidth="5"
+                              fill="transparent"
+                              className="text-slate-200"
+                            />
+                            <circle
+                              cx="32"
+                              cy="32"
+                              r="26"
+                              stroke="currentColor"
+                              strokeWidth="5"
+                              fill="transparent"
+                              strokeDasharray={2 * Math.PI * 26}
+                              strokeDashoffset={2 * Math.PI * 26 * (1 - agentClosureStats.efficiencyRate / 100)}
+                              className="text-cyan-600 transition-all duration-500"
+                            />
+                          </svg>
+                          <span className="absolute text-sm font-bold text-slate-900">{agentClosureStats.efficiencyRate}%</span>
+                        </div>
+                        <div>
+                          <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Closure Rate (Efficiency)</div>
+                          <div className="text-sm font-bold text-slate-900 mt-0.5">{agentClosureStats.totalClosedCount} / {agentClosureStats.totalAssignedCount} cases</div>
+                        </div>
+                      </div>
+
+                      {/* Revenue Collected */}
+                      <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-5">
+                        <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Collected Revenue</div>
+                        <div className="text-2xl font-black text-emerald-600 mt-1 tracking-tight">
+                          {formatCurrency(agentClosureStats.totalCollectedAmount)}
+                        </div>
+                        <div className="text-xs text-slate-500 mt-1 font-medium">From resolved "Payment Done" cases</div>
+                      </div>
+
+                      {/* Pending Exposure */}
+                      <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-5">
+                        <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Pending Exposure</div>
+                        <div className="text-2xl font-black text-rose-600 mt-1 tracking-tight">
+                          {formatCurrency(agentClosureStats.pendingExposureAmount)}
+                        </div>
+                        <div className="text-xs text-slate-500 mt-1 font-medium">Assigned remaining to collect</div>
+                      </div>
+
+                      {/* Total Logged Follow-ups */}
+                      <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-5">
+                        <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Follow-ups</div>
+                        <div className="text-2xl font-black text-slate-900 mt-1 tracking-tight">
+                          {agentClosureStats.totalFollowupsMade}
+                        </div>
+                        <div className="text-xs text-slate-500 mt-1 font-medium">Logged interaction events</div>
+                      </div>
+
+                    </div>
+
+                    {/* Progress details */}
+                    <div className="mt-4 bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+                      <div className="flex justify-between items-center text-xs font-semibold text-slate-500 uppercase mb-2">
+                        <span>Recovery Progress Bar</span>
+                        <span>{agentClosureStats.efficiencyRate}% closed</span>
+                      </div>
+                      <div className="h-3 w-full bg-slate-100 rounded-full overflow-hidden flex">
+                        <div
+                          className="h-full bg-gradient-to-r from-cyan-500 to-emerald-500 transition-all duration-500"
+                          style={{ width: `${agentClosureStats.efficiencyRate}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-between items-center text-xs text-slate-400 mt-2 font-medium">
+                        <span>Resolved Target: {agentClosureStats.totalClosedCount}</span>
+                        <span>Total Assigned: {agentClosureStats.totalAssignedCount}</span>
+                      </div>
+                    </div>
+
+                  </div>
+                </Panel>
+
                 <section className="grid gap-6 xl:grid-cols-2">
                   <Panel title="Default by Lender" subtitle="">
                     <div className="mb-5 grid gap-3 md:grid-cols-3">
@@ -1457,7 +1773,14 @@ function App() {
                         <tbody>
                           {topCustomers.map((customer) => (
                             <tr key={customer.userId} className="border-t border-slate-100">
-                              <td className="py-3 font-semibold">{customer.userId}</td>
+                              <td className="py-3 font-semibold">
+                                <button
+                                  onClick={() => setSelectedUserId(customer.userId)}
+                                  className="text-cyan-600 hover:text-cyan-700 hover:underline transition font-semibold"
+                                >
+                                  {customer.userId}
+                                </button>
+                              </td>
                               <td className="py-3">{customer.customerName || "-"}</td>
                               <td className="py-3">{customer.lender || "-"}</td>
                               <td className="py-3">{customer.loanCount}</td>
@@ -1537,7 +1860,14 @@ function App() {
                                 draft.callStatus === "Payment Done" ? "bg-emerald-50" : ""
                               }`}
                             >
-                              <td className="py-3 font-semibold">{group.userId}</td>
+                              <td className="py-3 font-semibold">
+                                <button
+                                  onClick={() => setSelectedUserId(group.userId)}
+                                  className="text-cyan-600 hover:text-cyan-700 hover:underline transition font-semibold"
+                                >
+                                  {group.userId}
+                                </button>
+                              </td>
                               <td className="py-3">{group.customerName || "-"}</td>
                               <td className="py-3">{group.lender}</td>
                               <td className="py-3">{group.anchor || "-"}</td>
@@ -1875,7 +2205,14 @@ function App() {
                       <tbody>
                         {topCustomers.map((customer) => (
                           <tr key={customer.userId} className="border-t border-slate-100">
-                            <td className="py-3 font-semibold">{customer.userId}</td>
+                            <td className="py-3 font-semibold">
+                              <button
+                                onClick={() => setSelectedUserId(customer.userId)}
+                                className="text-cyan-600 hover:text-cyan-700 hover:underline transition font-semibold"
+                              >
+                                {customer.userId}
+                              </button>
+                            </td>
                             <td className="py-3">{customer.customerName || "-"}</td>
                             <td className="py-3">
                               <div className="space-y-1">
@@ -1957,8 +2294,22 @@ function App() {
                       <tbody>
                         {filteredRecords.map((record) => (
                           <tr key={record.id} className="border-t border-slate-100">
-                            <td className="py-3 font-semibold">{record.userId}</td>
-                            <td className="py-3">{record.loanId}</td>
+                            <td className="py-3 font-semibold">
+                              <button
+                                onClick={() => setSelectedUserId(record.userId)}
+                                className="text-cyan-600 hover:text-cyan-700 hover:underline transition font-semibold"
+                              >
+                                {record.userId}
+                              </button>
+                            </td>
+                            <td className="py-3">
+                              <button
+                                onClick={() => setSelectedUserId(record.loanId)}
+                                className="text-cyan-600 hover:text-cyan-700 hover:underline transition font-semibold"
+                              >
+                                {record.loanId}
+                              </button>
+                            </td>
                             <td className="py-3">{record.customerName || "-"}</td>
                             <td className="py-3">{record.lender || "-"}</td>
                             <td className="py-3">{record.anchor || "-"}</td>
@@ -2184,6 +2535,243 @@ function App() {
                     </Panel>
                   </div>
                 </div>
+
+                {/* Telegram Alerts Integration */}
+                <div className="grid gap-6 lg:grid-cols-3 mt-6">
+                  <div className="lg:col-span-2">
+                    <Panel title="🔔 Telegram Reminders Configuration" subtitle="Configure automated alert updates for collection agents">
+                      <form onSubmit={handleSaveTelegramSettings} className="space-y-4">
+                        {telegramSaveSuccess && (
+                          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400 animate-pulse">
+                            {telegramSaveSuccess}
+                          </div>
+                        )}
+                        
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                              Telegram Bot Token
+                            </label>
+                            <input
+                              type="password"
+                              value={telegramSettings.botToken}
+                              onChange={(e) => setTelegramSettings(prev => ({ ...prev, botToken: e.target.value }))}
+                              placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
+                              className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                              Agent Chat ID
+                            </label>
+                            <input
+                              type="text"
+                              value={telegramSettings.chatId}
+                              onChange={(e) => setTelegramSettings(prev => ({ ...prev, chatId: e.target.value }))}
+                              placeholder="-100123456789 or 98765432"
+                              className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2 items-center">
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                              Agent Reference Name
+                            </label>
+                            <input
+                              type="text"
+                              value={telegramSettings.agentName}
+                              onChange={(e) => setTelegramSettings(prev => ({ ...prev, agentName: e.target.value }))}
+                              placeholder="Vikas Rai"
+                              className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition"
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-3 pt-4">
+                            <input
+                              type="checkbox"
+                              id="telegram-alerts-enabled"
+                              checked={telegramSettings.isEnabled}
+                              onChange={(e) => setTelegramSettings(prev => ({ ...prev, isEnabled: e.target.checked }))}
+                              className="h-5 w-5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                            />
+                            <label htmlFor="telegram-alerts-enabled" className="text-sm font-semibold text-slate-700 select-none cursor-pointer">
+                              Enable Automated Operational Hour alerts (10 AM - 6 PM)
+                            </label>
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          className="rounded-2xl bg-cyan-600 px-6 py-2.5 font-semibold text-white shadow-lg transition hover:bg-cyan-700"
+                        >
+                          Save Settings
+                        </button>
+                      </form>
+                    </Panel>
+                  </div>
+
+                  <div className="lg:col-span-1">
+                    <Panel title="🧪 Telegram Alert Testing Suite" subtitle="Send an instant test notification to ensure credentials work">
+                      <div className="space-y-4">
+                        {telegramTestSuccess && (
+                          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
+                            {telegramTestSuccess}
+                          </div>
+                        )}
+                        {telegramTestError && (
+                          <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
+                            {telegramTestError}
+                          </div>
+                        )}
+
+                        <div className="space-y-2">
+                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                            Custom Test Message
+                          </label>
+                          <textarea
+                            value={telegramTestMessage}
+                            onChange={(e) => setTelegramTestMessage(e.target.value)}
+                            placeholder="Type a test alert message..."
+                            className="w-full h-20 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition resize-none"
+                          />
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={handleSendTelegramTest}
+                          disabled={telegramTestLoading}
+                          className="w-full rounded-2xl bg-slate-950 py-3 font-semibold text-white shadow-lg transition hover:bg-slate-800 disabled:bg-slate-300"
+                        >
+                          {telegramTestLoading ? "Sending Notification..." : "Dispatch Alert Now"}
+                        </button>
+                      </div>
+                    </Panel>
+                  </div>
+                </div>
+
+                {/* Interactive Chronological History Timeline Drawer */}
+                {selectedUserId && (
+                  <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/60 backdrop-blur-sm">
+                    {/* Backdrop Click Dismiss */}
+                    <div className="absolute inset-0" onClick={() => setSelectedUserId(null)} />
+                    
+                    <div className="relative w-full max-w-2xl bg-white h-full shadow-2xl flex flex-col animate-slide-in relative z-10 border-l border-slate-100">
+                      {/* Drawer Header */}
+                      <div className="flex items-center justify-between border-b border-slate-100 p-6 bg-slate-50">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="rounded-full bg-cyan-100 px-3 py-1 text-xs font-bold text-cyan-800">
+                              Timeline Report
+                            </span>
+                            <span className="text-xs text-slate-500 font-mono">ID: {selectedUserId}</span>
+                          </div>
+                          <h3 className="text-xl font-black text-slate-900 mt-2">
+                            {selectedUserRecord?.customerName || "Interaction History"}
+                          </h3>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Chronological history logs of calls, remarks, and callbacks
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setSelectedUserId(null)}
+                          className="rounded-full p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition"
+                          title="Close panel"
+                        >
+                          <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+
+                      {/* Customer Quick Summary Cards */}
+                      {selectedUserRecord && (
+                        <div className="p-6 bg-white border-b border-slate-100 grid gap-4 grid-cols-3">
+                          <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-3">
+                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Default Balance</div>
+                            <div className="text-sm font-black text-rose-600 mt-1">{formatCurrency(selectedUserRecord.defaultAmount)}</div>
+                          </div>
+                          <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-3">
+                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Current Status</div>
+                            <div className="mt-1">
+                              <StatusPill value={selectedUserRecord.callStatus || selectedUserRecord.status || "Pending"} />
+                            </div>
+                          </div>
+                          <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-3">
+                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Lender</div>
+                            <div className="text-xs font-semibold text-slate-800 mt-1 truncate">{selectedUserRecord.lender || "-"}</div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Timeline Body */}
+                      <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50">
+                        {selectedUserLogs.length === 0 ? (
+                          <div className="flex flex-col items-center justify-center h-64 text-slate-400 text-center px-4">
+                            <svg className="h-12 w-12 text-slate-300 stroke-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <p className="mt-4 text-sm font-semibold">No interaction history logs found for this customer</p>
+                            <p className="text-xs text-slate-500 mt-1">Updates made here will compile chronologically step-by-step</p>
+                          </div>
+                        ) : (
+                          <div className="relative border-l border-slate-200 pl-6 ml-3 space-y-8">
+                            {selectedUserLogs.map((log, index) => {
+                              const isFirst = index === 0;
+                              return (
+                                <div key={log.id} className="relative">
+                                  {/* Line Node Point */}
+                                  <span className={`absolute -left-[31px] top-1.5 flex h-4.5 w-4.5 items-center justify-center rounded-full ring-4 ring-white ${
+                                    isFirst ? "bg-cyan-600 ring-cyan-100" : "bg-slate-300"
+                                  }`}>
+                                    {isFirst && <span className="h-2 w-2 rounded-full bg-white" />}
+                                  </span>
+
+                                  {/* Log Details Container */}
+                                  <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+                                    <div className="flex items-center justify-between text-xs">
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-bold text-slate-800">{log.updatedBy || "Agent"}</span>
+                                        <span className="text-slate-400">•</span>
+                                        <span className="text-slate-500">{formatDate(log.updatedAt)}</span>
+                                      </div>
+                                      <StatusPill value={log.callStatus} />
+                                    </div>
+
+                                    {log.remark && (
+                                      <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-700 font-medium">
+                                        {log.remark}
+                                      </div>
+                                    )}
+
+                                    {log.followUpDate && (
+                                      <div className="flex items-center gap-2 text-xs font-semibold text-amber-600 bg-amber-50 rounded-lg px-2.5 py-1.5 w-fit">
+                                        <BellRing className="h-3 w-3" />
+                                        <span>Next Follow-up Callback: {log.followUpDate}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                      
+                      {/* Drawer Footer */}
+                      <div className="border-t border-slate-100 p-6 bg-slate-50 flex justify-end">
+                        <button
+                          onClick={() => setSelectedUserId(null)}
+                          className="rounded-2xl border border-slate-200 bg-white px-6 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
+                        >
+                          Close Timeline
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {resettingUser && (
                   <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
