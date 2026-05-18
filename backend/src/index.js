@@ -20,7 +20,7 @@ app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 app.use(morgan('dev'));
 
-// Helper to send Telegram message using native https
+// Helper to send Telegram message using native https with strict error parsing
 function sendTelegramMessage(botToken, chatId, text, replyMarkup = null) {
   return new Promise((resolve, reject) => {
     const payload = {
@@ -47,7 +47,20 @@ function sendTelegramMessage(botToken, chatId, text, replyMarkup = null) {
     const req = https.request(options, (res) => {
       let body = '';
       res.on('data', (chunk) => body += chunk);
-      res.on('end', () => resolve(body));
+      res.on('end', () => {
+        try {
+          const result = JSON.parse(body);
+          if (res.statusCode !== 200 || !result.ok) {
+            return reject(new Error(result.description || `Telegram API responded with status code ${res.statusCode}`));
+          }
+          resolve(result);
+        } catch (err) {
+          if (res.statusCode !== 200) {
+            return reject(new Error(`Telegram API responded with status ${res.statusCode}: ${body}`));
+          }
+          resolve(body);
+        }
+      });
     });
 
     req.on('error', (e) => reject(e));
@@ -554,6 +567,12 @@ async function checkAndSendTelegramReminders(force = false) {
     );
     const records = recordsResult.rows[0]?.payload || [];
 
+    // Get interaction logs for Activity timeline sync
+    const logsResult = await query(
+      "SELECT payload FROM app_state WHERE state_key = 'interaction_logs'"
+    );
+    const interactionLogs = logsResult.rows[0]?.payload || [];
+
     const pendingReminders = records.filter(r => {
       const needsApproach = r.callStatus === 'Call Back Later' || r.callStatus === 'Promise To Pay';
       
@@ -619,11 +638,15 @@ async function checkAndSendTelegramReminders(force = false) {
       const invoiceCountLabel = group.recordsCount > 1 ? ` (${group.recordsCount} Invoices)` : '';
       const combinedRemark = group.remarks.length > 0 ? group.remarks.join(' | ') : 'N/A';
 
+      const cleanPhone = group.mobile ? group.mobile.replace(/\D/g, '') : '';
+      const callUrl = cleanPhone.length === 10 ? `+91${cleanPhone}` : cleanPhone;
+      const contactLabel = group.mobile ? `[${group.mobile}](tel:${callUrl})` : 'N/A';
+
       const msg = `🔔 *Collection Follow-up Alert*\n\n` +
                   `👤 *Customer*: ${group.customerName}\n` +
                   `🆔 *User ID*: ${group.userId}\n` +
                   `💰 *Total Default*: ₹${group.totalDefaultAmount.toLocaleString('en-IN')}${invoiceCountLabel}\n` +
-                  `📞 *Contact*: ${group.mobile || 'N/A'}\n` +
+                  `📞 *Contact*: ${contactLabel}\n` +
                   `📅 *Follow-up Date*: ${group.followUpDate}\n` +
                   `⏰ *Follow-up Time*: ${group.followUpTime}\n` +
                   `📝 *Remarks*: ${combinedRemark}\n\n` +
@@ -632,19 +655,18 @@ async function checkAndSendTelegramReminders(force = false) {
       // Build call & whatsapp inline keyboard buttons
       let replyMarkup = null;
       if (group.mobile) {
-        const cleanPhone = group.mobile.replace(/\D/g, '');
         const formattedPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
         
         replyMarkup = {
           inline_keyboard: [
             [
               {
-                text: "📞 Call Customer",
-                url: cleanPhone.length === 10 ? `tel:+91${cleanPhone}` : `tel:${cleanPhone}`
-              },
-              {
                 text: "💬 Chat on WhatsApp",
                 url: `https://wa.me/${formattedPhone}`
+              },
+              {
+                text: "💻 Kredmint Console",
+                url: `https://console.kredmint.in/merchant/dashboard/?userId=${group.userId}`
               }
             ]
           ]
@@ -663,6 +685,20 @@ async function checkAndSendTelegramReminders(force = false) {
             match.reminderEnabled = false;
             databaseUpdateNeeded = true;
           }
+
+          // Append to Activity Timeline logs
+          interactionLogs.push({
+            id: `tele-rem-${origRec.id}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            loanId: origRec.loanId,
+            userId: origRec.userId,
+            customerName: origRec.customerName,
+            callStatus: origRec.callStatus,
+            remark: `🔔 [Telegram Alert] Follow-up reminder successfully dispatched to Vikas Rai (Telegram).`,
+            followUpDate: origRec.followUpDate,
+            followUpTime: origRec.followUpTime || "",
+            updatedAt: new Date().toISOString(),
+            updatedBy: "System (Telegram Alert)"
+          });
         }
       } catch (err) {
         console.error(`[Telegram Scheduler] Error sending for ${group.userId}:`, err.message);
@@ -670,13 +706,17 @@ async function checkAndSendTelegramReminders(force = false) {
       }
     }
 
-    // Save back the updated records state if any reminder was successfully sent and marked false
+    // Save back the updated records and activity logs state if any reminder was successfully sent and marked false
     if (databaseUpdateNeeded) {
       await query(
         "INSERT INTO app_state (state_key, payload) VALUES ($1, $2) ON CONFLICT (state_key) DO UPDATE SET payload = EXCLUDED.payload",
         ['records', JSON.stringify(records)]
       );
-      console.log(`[Telegram Scheduler] Successfully updated database to clear dispatched reminders.`);
+      await query(
+        "INSERT INTO app_state (state_key, payload) VALUES ($1, $2) ON CONFLICT (state_key) DO UPDATE SET payload = EXCLUDED.payload",
+        ['interaction_logs', JSON.stringify(interactionLogs)]
+      );
+      console.log(`[Telegram Scheduler] Successfully updated database to clear dispatched reminders and record activity logs.`);
     }
 
   } catch (error) {
