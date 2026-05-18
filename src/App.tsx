@@ -3038,6 +3038,152 @@ function App() {
                   </div>
                 </Panel>
 
+                {/* Telegram Alerts Integration */}
+                {user?.role === "admin" && (
+                  <div className="grid gap-6 lg:grid-cols-3 mt-6">
+                    <div className="lg:col-span-2">
+                      <Panel title="🔔 Telegram Reminders Configuration" subtitle="Configure automated alert updates for collection agents">
+                        <form onSubmit={handleSaveTelegramSettings} className="space-y-4">
+                          {telegramSaveSuccess && (
+                            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400 animate-pulse">
+                              {telegramSaveSuccess}
+                            </div>
+                          )}
+                          
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                                Telegram Bot Token
+                              </label>
+                              <input
+                                type="password"
+                                value={telegramSettings.botToken}
+                                onChange={(e) => setTelegramSettings(prev => ({ ...prev, botToken: e.target.value }))}
+                                placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
+                                className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                                Agent Chat ID
+                              </label>
+                              <input
+                                type="text"
+                                value={telegramSettings.chatId}
+                                onChange={(e) => setTelegramSettings(prev => ({ ...prev, chatId: e.target.value }))}
+                                placeholder="-100123456789 or 98765432"
+                                className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid gap-4 md:grid-cols-2 items-center">
+                            <div className="space-y-2">
+                              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                                Agent Reference Name
+                              </label>
+                              <input
+                                type="text"
+                                value={telegramSettings.agentName}
+                                onChange={(e) => setTelegramSettings(prev => ({ ...prev, agentName: e.target.value }))}
+                                placeholder="Vikas Rai"
+                                className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition"
+                              />
+                            </div>
+
+                            <div className="flex items-center gap-3 pt-4">
+                              <input
+                                type="checkbox"
+                                id="telegram-alerts-enabled"
+                                checked={telegramSettings.isEnabled}
+                                onChange={(e) => setTelegramSettings(prev => ({ ...prev, isEnabled: e.target.checked }))}
+                                className="h-5 w-5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                              />
+                              <label htmlFor="telegram-alerts-enabled" className="text-sm font-semibold text-slate-700 select-none cursor-pointer">
+                                Enable Automated Operational Hour alerts (10 AM - 6 PM)
+                              </label>
+                            </div>
+                          </div>
+
+                          <button
+                            type="submit"
+                            className="rounded-2xl bg-cyan-600 px-6 py-2.5 font-semibold text-white shadow-lg transition hover:bg-cyan-700"
+                          >
+                            Save Settings
+                          </button>
+                        </form>
+                      </Panel>
+                    </div>
+
+                    <div className="lg:col-span-1">
+                      <Panel title="🧪 Telegram Alert Testing Suite" subtitle="Send an instant test notification to ensure credentials work">
+                        <div className="space-y-4">
+                          {telegramTestSuccess && (
+                            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
+                              {telegramTestSuccess}
+                            </div>
+                          )}
+                          {telegramTestError && (
+                            <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
+                              {telegramTestError}
+                            </div>
+                          )}
+
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                              Custom Test Message
+                            </label>
+                            <textarea
+                              value={telegramTestMessage}
+                              onChange={(e) => setTelegramTestMessage(e.target.value)}
+                              placeholder="Type a test alert message..."
+                              className="w-full h-20 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none focus:border-cyan-400 focus:bg-white transition resize-none"
+                            />
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={handleSendTelegramTest}
+                            disabled={telegramTestLoading}
+                            className="w-full rounded-2xl bg-slate-950 py-3 font-semibold text-white shadow-lg transition hover:bg-slate-800 disabled:bg-slate-300"
+                          >
+                            {telegramTestLoading ? "Sending Notification..." : "Dispatch Test Alert Now"}
+                          </button>
+
+                          <div className="border-t border-slate-100 mt-6 pt-6 space-y-3">
+                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                              Active Reminder Operations
+                            </label>
+                            <p className="text-xs text-slate-400 leading-relaxed">
+                              Manually scan and trigger pending customer follow-up alerts immediately, bypassing the local hour constraints.
+                            </p>
+                            
+                            {cronRunSuccess && (
+                              <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-600 leading-normal">
+                                {cronRunSuccess}
+                              </div>
+                            )}
+                            {cronRunError && (
+                              <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-xs text-rose-500 leading-normal">
+                                {cronRunError}
+                              </div>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={handleRunCron}
+                              disabled={cronRunLoading}
+                              className="w-full rounded-2xl bg-cyan-600 py-3 font-semibold text-white shadow-lg transition hover:bg-cyan-700 disabled:bg-slate-300"
+                            >
+                              {cronRunLoading ? "Running Verification..." : "Run Active Reminders Check"}
+                            </button>
+                          </div>
+                        </div>
+                      </Panel>
+                    </div>
+                  </div>
+                )}
               </>
             )}
 
