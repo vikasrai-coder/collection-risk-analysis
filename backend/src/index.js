@@ -5,6 +5,7 @@ import morgan from 'morgan';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import https from 'https';
+import nodemailer from 'nodemailer';
 import { ensureSchema } from './utils/schema.js';
 import { getDatabaseStatus, query } from './utils/database.js';
 import { findUserByEmail, createUser, getAllUsers, updateUserPassword } from './utils/auth.js';
@@ -186,6 +187,185 @@ app.post('/api/auth/reset-password', authenticateToken, requireAdmin, async (req
   }
 });
 
+// Public Forgot Password Route
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email) {
+    return res.status(400).json({ message: 'Email address is required' });
+  }
+
+  try {
+    const user = await findUserByEmail(email);
+    if (!user) {
+      return res.status(404).json({ message: 'No account found with this email address' });
+    }
+
+    // Generate a secure temporary password: KM-XXXXXX (6 random digits)
+    const randomSuffix = Math.floor(100000 + Math.random() * 900000);
+    const tempPassword = `KM-${randomSuffix}`;
+
+    // Update the password in database
+    const updated = await updateUserPassword({ email, password: tempPassword });
+    if (!updated) {
+      return res.status(500).json({ message: 'Failed to generate temporary password' });
+    }
+
+    // Create standard nodemailer transporter
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER || 'kredmint@gmail.com',
+        pass: process.env.EMAIL_PASS || 'tqwa igoj bkjt ijrm'
+      }
+    });
+
+    const consoleUrl = req.headers.origin || 'http://localhost:3001';
+
+    // Premium HTML Email Template
+    const mailOptions = {
+      from: `"KredMint Security" <${process.env.EMAIL_USER || 'kredmint@gmail.com'}>`,
+      to: email,
+      subject: '🔒 Temporary Password - KredMint Collection Risk Console',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+              background-color: #0b0f19;
+              color: #f1f5f9;
+              margin: 0;
+              padding: 0;
+            }
+            .container {
+              max-width: 600px;
+              margin: 40px auto;
+              background-color: #0f172a;
+              border: 1px solid rgba(255, 255, 255, 0.1);
+              border-radius: 24px;
+              overflow: hidden;
+              box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.5);
+            }
+            .header {
+              background: linear-gradient(135deg, #0e7490 0%, #06b6d4 100%);
+              padding: 40px 20px;
+              text-align: center;
+            }
+            .header h1 {
+              margin: 0;
+              color: #ffffff;
+              font-size: 28px;
+              font-weight: 800;
+              letter-spacing: -0.025em;
+            }
+            .content {
+              padding: 40px 30px;
+            }
+            .greeting {
+              font-size: 18px;
+              font-weight: 600;
+              color: #ffffff;
+              margin-bottom: 16px;
+            }
+            .message {
+              font-size: 15px;
+              line-height: 1.6;
+              color: #94a3b8;
+              margin-bottom: 24px;
+            }
+            .password-card {
+              background-color: rgba(255, 255, 255, 0.03);
+              border: 1px dashed rgba(6, 182, 212, 0.4);
+              border-radius: 16px;
+              padding: 24px;
+              text-align: center;
+              margin: 32px 0;
+            }
+            .password-label {
+              font-size: 12px;
+              font-weight: 700;
+              text-transform: uppercase;
+              letter-spacing: 0.1em;
+              color: #06b6d4;
+              margin-bottom: 8px;
+            }
+            .password-value {
+              font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+              font-size: 32px;
+              font-weight: 800;
+              color: #ffffff;
+              letter-spacing: 2px;
+              margin: 0;
+            }
+            .cta-btn {
+              display: inline-block;
+              background-color: #06b6d4;
+              color: #0f172a !important;
+              text-decoration: none;
+              padding: 14px 32px;
+              font-size: 15px;
+              font-weight: 700;
+              border-radius: 12px;
+              text-align: center;
+              transition: background-color 0.2s;
+              margin-top: 16px;
+            }
+            .footer {
+              background-color: #090d16;
+              padding: 24px 30px;
+              text-align: center;
+              border-top: 1px solid rgba(255, 255, 255, 0.05);
+              font-size: 12px;
+              color: #64748b;
+              line-height: 1.5;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>KredMint Ops Console</h1>
+            </div>
+            <div class="content">
+              <div class="greeting">Hello,</div>
+              <div class="message">
+                We received a request to reset the password for your account on the <strong>Collection Risk Analysis Console</strong>. 
+                A new temporary password has been successfully generated for you.
+              </div>
+              
+              <div class="password-card">
+                <div class="password-label">Temporary Password</div>
+                <div class="password-value">${tempPassword}</div>
+              </div>
+              
+              <div class="message" style="margin-bottom: 32px;">
+                Please sign in with this temporary password. For security reasons, we strongly recommend changing this password immediately after logging in.
+              </div>
+              
+              <div style="text-align: center;">
+                <a href="${consoleUrl}" class="cta-btn">Sign In to Console</a>
+              </div>
+            </div>
+            <div class="footer">
+              This is an automated security notification. If you did not request a password reset, please contact your administrator or secure your email account immediately.<br>
+              <span style="display: inline-block; margin-top: 12px;">© 2026 KredMint Collection Risk Suite. All rights reserved.</span>
+            </div>
+          </div>
+        </body>
+        </html>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+    res.json({ message: 'Temporary password sent successfully to your email address.' });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ message: `Error sending password reset: ${error.message}` });
+  }
+});
+
 app.get('/api/state', async (_req, res) => {
   try {
     const result = await query(
@@ -292,22 +472,32 @@ app.post('/api/reminders/send-test', async (req, res) => {
 });
 
 // Reminder Scheduler to check active reminders between 10 AM and 6 PM local time
-async function checkAndSendTelegramReminders() {
+async function checkAndSendTelegramReminders(force = false) {
+  const stats = {
+    isEnabled: false,
+    checkedCount: 0,
+    dispatchedCount: 0,
+    errors: [],
+    skippedDueToTime: false
+  };
+
   try {
     const result = await query(
       "SELECT payload FROM app_state WHERE state_key = 'telegram_settings'"
     );
     const settings = result.rows[0]?.payload || {};
     if (!settings.isEnabled || !settings.botToken || !settings.chatId) {
-      return;
+      return stats;
     }
+    stats.isEnabled = true;
 
-    // Check time constraint: 10 AM to 6 PM (10:00 - 18:00)
+    // Check time constraint: 10 AM to 6 PM (10:00 - 18:00) unless forced
     const localTime = new Date();
     const hour = localTime.getHours();
-    if (hour < 10 || hour >= 18) {
+    if (!force && (hour < 10 || hour >= 18)) {
       console.log(`[Telegram Scheduler] Hour ${hour} outside active operational window (10:00 - 18:00). Skipping scheduler alerts.`);
-      return;
+      stats.skippedDueToTime = true;
+      return stats;
     }
 
     // Get active records
@@ -324,8 +514,9 @@ async function checkAndSendTelegramReminders() {
       return r.reminderEnabled && (needsApproach || isTodayOrPast) && r.callStatus !== 'Payment Done';
     });
 
+    stats.checkedCount = pendingReminders.length;
     if (pendingReminders.length === 0) {
-      return;
+      return stats;
     }
 
     console.log(`[Telegram Scheduler] Found ${pendingReminders.length} pending followups. Dispatching alerts...`);
@@ -343,17 +534,43 @@ async function checkAndSendTelegramReminders() {
       try {
         await sendTelegramMessage(settings.botToken, settings.chatId, msg);
         console.log(`[Telegram Scheduler] Alert sent for user: ${record.userId}`);
+        stats.dispatchedCount++;
       } catch (err) {
         console.error(`[Telegram Scheduler] Error sending for ${record.userId}:`, err.message);
+        stats.errors.push({ userId: record.userId, error: err.message });
       }
     }
   } catch (error) {
     console.error('[Telegram Scheduler] Error in reminder cycle:', error.message);
+    stats.errors.push({ global: error.message });
   }
+  return stats;
 }
 
-// Check every 30 minutes
-setInterval(checkAndSendTelegramReminders, 30 * 60 * 1000);
+// Endpoint to trigger cron check / manual trigger of reminders
+app.post('/api/reminders/cron-check', async (req, res) => {
+  const { force } = req.body || {};
+  try {
+    const stats = await checkAndSendTelegramReminders(!!force);
+    res.json({ ok: true, stats });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// GET endpoint as well for easy vercel cron trigger
+app.get('/api/reminders/cron-check', async (req, res) => {
+  const force = req.query.force === 'true';
+  try {
+    const stats = await checkAndSendTelegramReminders(force);
+    res.json({ ok: true, stats });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Check every 30 minutes in background (in local environments)
+setInterval(() => checkAndSendTelegramReminders(false), 30 * 60 * 1000);
 
 if (process.env.NODE_ENV !== 'production' || process.env.VERCEL) {
   ensureSchema()

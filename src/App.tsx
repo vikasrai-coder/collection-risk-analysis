@@ -389,6 +389,29 @@ function isLocked(record: CollectionRecord) {
   return record.callStatus === "Payment Done" && record.updatedAt.slice(0, 10) === todayIso();
 }
 
+function mergeInteractionLogs(prev: InteractionHistoryItem[], newLogs: InteractionHistoryItem[]): InteractionHistoryItem[] {
+  const next = [...prev];
+  for (const newLog of newLogs) {
+    const newDateStr = newLog.updatedAt.slice(0, 10);
+    const existingIndex = next.findIndex(
+      (log) => log.loanId === newLog.loanId && log.updatedAt.slice(0, 10) === newDateStr
+    );
+    if (existingIndex > -1) {
+      next[existingIndex] = {
+        ...next[existingIndex],
+        callStatus: newLog.callStatus || next[existingIndex].callStatus,
+        remark: newLog.remark || next[existingIndex].remark,
+        followUpDate: newLog.followUpDate || next[existingIndex].followUpDate,
+        updatedAt: newLog.updatedAt,
+        updatedBy: newLog.updatedBy,
+      };
+    } else {
+      next.unshift(newLog);
+    }
+  }
+  return next;
+}
+
 function loadRecords() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return seedRecords;
@@ -431,6 +454,16 @@ function App() {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
+  const [loginMode, setLoginMode] = useState<"login" | "forgot">("login");
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotSuccess, setForgotSuccess] = useState("");
+  const [forgotError, setForgotError] = useState("");
+  const [forgotLoading, setForgotLoading] = useState(false);
+
+  // Cron running states
+  const [cronRunLoading, setCronRunLoading] = useState(false);
+  const [cronRunSuccess, setCronRunSuccess] = useState("");
+  const [cronRunError, setCronRunError] = useState("");
 
   // User management states (Admin only)
   const [newEmail, setNewEmail] = useState("");
@@ -531,6 +564,68 @@ function App() {
       setLoginError(err.message || "Something went wrong. Please check your credentials.");
     } finally {
       setLoginLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotError("");
+    setForgotSuccess("");
+    if (!forgotEmail) {
+      setForgotError("Please enter your email address.");
+      return;
+    }
+    setForgotLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/forgot-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to process request");
+      }
+      setForgotSuccess("A temporary password has been successfully dispatched to your email!");
+      // Pre-fill login email for user convenience
+      setLoginEmail(forgotEmail);
+      setForgotEmail("");
+    } catch (err: any) {
+      setForgotError(err.message || "Something went wrong. Please try again.");
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleRunCron = async () => {
+    setCronRunSuccess("");
+    setCronRunError("");
+    setCronRunLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/reminders/cron-check`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ force: true }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to trigger reminder check");
+      }
+      const stats = data.stats || {};
+      if (!stats.isEnabled) {
+        setCronRunError("Telegram reminders are currently disabled. Enable them in settings.");
+      } else {
+        setCronRunSuccess(
+          `🔔 Check complete! Evaluated ${stats.checkedCount} pending reminder(s). Dispatched ${stats.dispatchedCount} Telegram alert(s).`
+        );
+      }
+    } catch (err: any) {
+      setCronRunError(err.message || "Something went wrong running reminder check.");
+    } finally {
+      setCronRunLoading(false);
     }
   };
 
@@ -686,30 +781,54 @@ function App() {
   }, [activePage, user]);
 
   useEffect(() => {
-    readPersistedRecords()
-      .then(setRecords)
-      .catch(() => setRecords(loadRecords()))
-      .finally(() => setRecordsReady(true));
-    setUploadHistory(loadHistory());
-  }, []);
+    let active = true;
 
-  useEffect(() => {
-    fetchBackendState()
-      .then((state) => {
+    async function initApp() {
+      try {
+        const state = await fetchBackendState();
+        if (!active) return;
+
         if (Array.isArray(state.records) && state.records.length) {
           setRecords(restrictToAllowedLenders(state.records));
+        } else {
+          const localRecs = await readPersistedRecords().catch(() => loadRecords());
+          if (active) setRecords(localRecs);
         }
+
         if (Array.isArray(state.history) && state.history.length) {
           setUploadHistory(state.history);
+        } else {
+          setUploadHistory(loadHistory());
         }
+
         if (Array.isArray(state.interaction_logs)) {
           setInteractionLogs(state.interaction_logs);
         }
+
         if (state.telegram_settings) {
           setTelegramSettings(state.telegram_settings);
         }
-      })
-      .catch(() => {});
+      } catch (err) {
+        console.warn("Backend state unavailable, using local persistence:", err);
+        if (!active) return;
+
+        const localRecs = await readPersistedRecords().catch(() => loadRecords());
+        if (active) {
+          setRecords(localRecs);
+          setUploadHistory(loadHistory());
+        }
+      } finally {
+        if (active) {
+          setRecordsReady(true);
+        }
+      }
+    }
+
+    initApp();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -799,7 +918,7 @@ function App() {
         existing.loanCount += record.loanId ? 1 : 0;
         existing.totalLoanAmount += record.loanAmount;
         existing.totalDefaultAmount += record.defaultAmount;
-        existing.avgRisk += record.riskScore;
+        existing.avgRisk += Number(record.riskScore || 0);
       } else {
         groups.set(key, {
           userId: record.userId,
@@ -812,7 +931,7 @@ function App() {
           loanCount: record.loanId ? 1 : 0,
           totalLoanAmount: record.loanAmount,
           totalDefaultAmount: record.defaultAmount,
-          avgRisk: record.riskScore,
+          avgRisk: Number(record.riskScore || 0),
         });
       }
     }
@@ -829,7 +948,7 @@ function App() {
     const paymentDoneCount = filteredRecords.filter((record) => record.callStatus === "Payment Done").length;
     const remindersCount = filteredRecords.filter((record) => record.reminderEnabled && record.followUpDate).length;
     const avgRisk = filteredRecords.length
-      ? Math.round(filteredRecords.reduce((sum, record) => sum + record.riskScore, 0) / filteredRecords.length)
+      ? Math.round(filteredRecords.reduce((sum, record) => sum + Number(record.riskScore || 0), 0) / filteredRecords.length)
       : 0;
 
     return {
@@ -927,6 +1046,21 @@ function App() {
     return records.find((r) => r.userId === selectedUserId || r.loanId === selectedUserId);
   }, [selectedUserId, records]);
 
+  const selectedUserGroupData = useMemo(() => {
+    if (!selectedUserId || !selectedUserRecord) return null;
+    const groupRecords = records.filter(
+      (r) => r.userId === selectedUserRecord.userId && r.lender === selectedUserRecord.lender
+    );
+    const totalDefaultAmount = groupRecords.reduce((sum, r) => sum + (r.defaultAmount || 0), 0);
+    const totalLoanAmount = groupRecords.reduce((sum, r) => sum + (r.loanAmount || 0), 0);
+    const loanCount = groupRecords.length;
+    return {
+      totalDefaultAmount,
+      totalLoanAmount,
+      loanCount,
+    };
+  }, [selectedUserId, selectedUserRecord, records]);
+
   const selectedUserLogs = useMemo(() => {
     if (!selectedUserId) return [];
     const logs = [...interactionLogs.filter(
@@ -937,7 +1071,7 @@ function App() {
     // so it shows chronologically inside the Interaction Activity Timeline
     if (selectedUserRecord && (selectedUserRecord.remark || selectedUserRecord.callStatus)) {
       const hasInitialLog = logs.some(log => log.id === `initial-sheet-remark-${selectedUserRecord.id}`);
-      if (!hasInitialLog) {
+      if (!hasInitialLog && logs.length === 0) {
         logs.push({
           id: `initial-sheet-remark-${selectedUserRecord.id}`,
           loanId: selectedUserRecord.loanId,
@@ -975,7 +1109,12 @@ function App() {
   const reminderQueue = useMemo(
     () =>
       filteredRecords
-        .filter((record) => record.followUpDate || record.reminderEnabled)
+        .filter((record) => 
+          (record.followUpDate || record.reminderEnabled) &&
+          record.callStatus !== "Payment Done" &&
+          record.status !== "Closed" &&
+          record.status !== "Payment Clear"
+        )
         .sort((a, b) => (a.followUpDate || "9999").localeCompare(b.followUpDate || "9999")),
     [filteredRecords],
   );
@@ -1008,6 +1147,9 @@ function App() {
     const groups = new Map<string, FollowupGroup>();
 
     for (const record of filteredRecords) {
+      if (record.callStatus === "Payment Done" || record.status === "Closed" || record.status === "Payment Clear") {
+        continue;
+      }
       const groupKey = makeFollowupGroupKey(record);
       const existing = groups.get(groupKey);
       if (existing) {
@@ -1087,6 +1229,7 @@ function App() {
         const baseRecords = isSeedOnly(current) ? [] : current;
         const byLoanId = new Map(baseRecords.map((record) => [record.loanId || record.id, { ...record }]));
         const nextByLoanId = new Map(byLoanId);
+        const newLogs: InteractionHistoryItem[] = [];
 
         for (const row of data) {
           const userId = valueFromRow(row, ["userId", "user_id", "customer_id", "customerId"]);
@@ -1116,10 +1259,19 @@ function App() {
           const riskScore = computeRiskScore(loanAmount, defaultAmount, status);
           const paymentProbability = Math.max(5, 100 - riskScore);
 
+          const csvCallStatus = valueFromRow(row, ["callStatus", "call_status", "callStatusStr", "followUpStatus", "callstatus"]);
+          const csvRemark = valueFromRow(row, ["remark", "remarks", "comment", "comments", "agentRemark", "agentRemarks", "remarks_comment", "remark_comment"]);
+          const csvFollowUpDate = valueFromRow(row, ["followUpDate", "follow_up_date", "nextActionDate", "nextCallDate", "followupdate"]);
+
           const existing = nextByLoanId.get(loanId);
           if (existing) {
             if (!valueFromRow(row, ["loanId", "loan_id"])) matchedWithoutLoanId += 1;
-            nextByLoanId.set(loanId, {
+            
+            const finalCallStatus = csvCallStatus || existing.callStatus || "Pending";
+            const finalRemark = csvRemark || existing.remark || "";
+            const finalFollowUpDate = csvFollowUpDate || existing.followUpDate || "";
+
+            const updatedRec = {
               ...existing,
               userId,
               loanId,
@@ -1135,10 +1287,36 @@ function App() {
               collectionDate,
               riskScore,
               paymentProbability,
-            });
+              callStatus: finalCallStatus,
+              remark: finalRemark,
+              followUpDate: finalFollowUpDate,
+              reminderEnabled: !!finalFollowUpDate,
+              updatedAt: new Date().toISOString(),
+            };
+            nextByLoanId.set(loanId, updatedRec);
             updated += 1;
+
+            // Day-wise activity recording for non-closed / non-payment-clear accounts
+            const isClosed = status === "Closed" || status === "Payment Clear" || finalCallStatus === "Payment Done";
+            if (!isClosed) {
+              newLogs.push({
+                id: slug(),
+                loanId: loanId,
+                userId: userId,
+                customerName: customerName || existing.customerName || "Customer",
+                callStatus: finalCallStatus,
+                remark: finalRemark || "Daily Sheet Sync",
+                followUpDate: finalFollowUpDate,
+                updatedAt: new Date().toISOString(),
+                updatedBy: user?.email || "System Import",
+              });
+            }
           } else {
-            nextByLoanId.set(loanId, {
+            const finalCallStatus = csvCallStatus || "Pending";
+            const finalRemark = csvRemark || "";
+            const finalFollowUpDate = csvFollowUpDate || "";
+
+            const newRec = {
               id: slug(),
               userId,
               loanId,
@@ -1154,17 +1332,37 @@ function App() {
               collectionDate,
               riskScore,
               paymentProbability,
-              callStatus: "Pending",
-              remark: "",
-              followUpDate: "",
-              reminderEnabled: false,
-              updatedAt: "",
-            });
+              callStatus: finalCallStatus,
+              remark: finalRemark,
+              followUpDate: finalFollowUpDate,
+              reminderEnabled: !!finalFollowUpDate,
+              updatedAt: new Date().toISOString(),
+            };
+            nextByLoanId.set(loanId, newRec);
             created += 1;
+
+            // Day-wise activity recording for non-closed / non-payment-clear accounts
+            const isClosed = status === "Closed" || status === "Payment Clear" || finalCallStatus === "Payment Done";
+            if (!isClosed) {
+              newLogs.push({
+                id: slug(),
+                loanId: loanId,
+                userId: userId,
+                customerName: customerName || "Customer",
+                callStatus: finalCallStatus,
+                remark: finalRemark || "Daily Sheet Sync",
+                followUpDate: finalFollowUpDate,
+                updatedAt: new Date().toISOString(),
+                updatedBy: user?.email || "System Import",
+              });
+            }
           }
         }
 
         setRecords(restrictToAllowedLenders(Array.from(nextByLoanId.values())));
+        if (newLogs.length) {
+          setInteractionLogs((prev) => mergeInteractionLogs(prev, newLogs));
+        }
 
         const message =
           created || updated
@@ -1225,7 +1423,7 @@ function App() {
           updated += 1;
           return {
             ...record,
-            anchor: anchor || "",
+            anchor: anchor || record.anchor || "",
             mobile: mobile || record.mobile,
             alternateNumber: alternateNumber || record.alternateNumber,
             customerName: customerName || record.customerName,
@@ -1324,7 +1522,7 @@ function App() {
         updatedAt: rec.updatedAt,
         updatedBy: user?.email || "Agent",
       };
-      setInteractionLogs((prev) => [newLog, ...prev]);
+      setInteractionLogs((prev) => mergeInteractionLogs(prev, [newLog]));
     }
 
     setEditingId("");
@@ -1373,7 +1571,7 @@ function App() {
     );
 
     if (newLogs.length) {
-      setInteractionLogs((prev) => [...newLogs, ...prev]);
+      setInteractionLogs((prev) => mergeInteractionLogs(prev, newLogs));
     }
   }
 
@@ -1455,67 +1653,146 @@ function App() {
               <Database className="h-8 w-8 animate-pulse" />
             </div>
             <h2 className="mt-6 text-3xl font-extrabold tracking-tight text-white">
-              Collection Risk Console
+              {loginMode === "login" ? "Collection Risk Console" : "Reset Password"}
             </h2>
             <p className="mt-2 text-sm text-slate-400">
-              Please sign in to access portfolio controls
+              {loginMode === "login" 
+                ? "Please sign in to access portfolio controls" 
+                : "Enter your email to receive a temporary login password"}
             </p>
           </div>
 
           <div className="rounded-3xl bg-slate-900/60 border border-white/10 p-8 shadow-2xl backdrop-blur-xl">
-            <form onSubmit={handleLogin} className="space-y-6">
-              {loginError && (
-                <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400 flex items-center gap-2">
-                  <Lock className="h-4 w-4 shrink-0" />
-                  <span>{loginError}</span>
-                </div>
-              )}
-
-              <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-300 flex items-center gap-2">
-                  <Mail className="h-4 w-4 text-cyan-400" />
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  required
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  placeholder="name@kredmint.com"
-                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-slate-500 outline-none transition focus:border-cyan-400 focus:bg-white/10 focus:ring-1 focus:ring-cyan-400"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-300 flex items-center gap-2">
-                  <Key className="h-4 w-4 text-cyan-400" />
-                  Password
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-slate-500 outline-none transition focus:border-cyan-400 focus:bg-white/10 focus:ring-1 focus:ring-cyan-400"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={loginLoading}
-                className="w-full rounded-2xl bg-cyan-400 py-3.5 font-bold text-slate-950 shadow-lg shadow-cyan-400/20 transition hover:bg-cyan-300 hover:shadow-cyan-400/30 active:scale-[0.98] disabled:bg-slate-700 disabled:text-slate-500 flex items-center justify-center gap-2"
-              >
-                {loginLoading ? (
-                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-950 border-t-transparent" />
-                ) : (
-                  <>
-                    <Lock className="h-4 w-4" />
-                    Sign In
-                  </>
+            {loginMode === "login" ? (
+              <form onSubmit={handleLogin} className="space-y-6">
+                {loginError && (
+                  <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400 flex items-center gap-2">
+                    <Lock className="h-4 w-4 shrink-0" />
+                    <span>{loginError}</span>
+                  </div>
                 )}
-              </button>
-            </form>
+                
+                {forgotSuccess && (
+                  <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400 flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    <span>{forgotSuccess}</span>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                    <Mail className="h-4 w-4 text-cyan-400" />
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    placeholder="name@kredmint.com"
+                    className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-slate-500 outline-none transition focus:border-cyan-400 focus:bg-white/10 focus:ring-1 focus:ring-cyan-400"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                      <Key className="h-4 w-4 text-cyan-400" />
+                      Password
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLoginMode("forgot");
+                        setForgotError("");
+                        setForgotSuccess("");
+                      }}
+                      className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 transition outline-none cursor-pointer"
+                    >
+                      Forgot Password?
+                    </button>
+                  </div>
+                  <input
+                    type="password"
+                    required
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-slate-500 outline-none transition focus:border-cyan-400 focus:bg-white/10 focus:ring-1 focus:ring-cyan-400"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={loginLoading}
+                  className="w-full rounded-2xl bg-cyan-400 py-3.5 font-bold text-slate-950 shadow-lg shadow-cyan-400/20 transition hover:bg-cyan-300 hover:shadow-cyan-400/30 active:scale-[0.98] disabled:bg-slate-700 disabled:text-slate-500 flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  {loginLoading ? (
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-950 border-t-transparent" />
+                  ) : (
+                    <>
+                      <Lock className="h-4 w-4" />
+                      Sign In
+                    </>
+                  )}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleForgotPassword} className="space-y-6">
+                {forgotError && (
+                  <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400 flex items-center gap-2">
+                    <Lock className="h-4 w-4 shrink-0" />
+                    <span>{forgotError}</span>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                    <Mail className="h-4 w-4 text-cyan-400" />
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={forgotEmail}
+                    onChange={(e) => setForgotEmail(e.target.value)}
+                    placeholder="name@kredmint.com"
+                    className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-slate-500 outline-none transition focus:border-cyan-400 focus:bg-white/10 focus:ring-1 focus:ring-cyan-400"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={forgotLoading}
+                  className="w-full rounded-2xl bg-cyan-400 py-3.5 font-bold text-slate-950 shadow-lg shadow-cyan-400/20 transition hover:bg-cyan-300 hover:shadow-cyan-400/30 active:scale-[0.98] disabled:bg-slate-700 disabled:text-slate-500 flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  {forgotLoading ? (
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-950 border-t-transparent" />
+                  ) : (
+                    <>
+                      <Key className="h-4 w-4" />
+                      Send Reset Instructions
+                    </>
+                  )}
+                </button>
+
+                <div className="text-center mt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginMode("login");
+                      setForgotError("");
+                    }}
+                    className="text-sm font-semibold text-slate-400 hover:text-white transition flex items-center justify-center gap-1.5 mx-auto outline-none cursor-pointer"
+                  >
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                    </svg>
+                    Back to Sign In
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
           
           <div className="text-center text-xs text-slate-500">
@@ -1861,7 +2138,7 @@ function App() {
                     value={`${formatCurrency(dailyHandledAmount)} / ${dailyHandledRecords.length} ${dailyHandledRecords.length === 1 ? "loan" : "loans"}`}
                   />
                   <MetricCard icon={CheckCircle2} label="Payment Done" value={String(summary.paymentDoneCount)} />
-                  <MetricCard icon={Clock3} label="Pending Queue" value={String(filteredRecords.filter((record) => record.callStatus !== "Payment Done").length)} />
+                  <MetricCard icon={Clock3} label="Pending Queue" value={String(filteredRecords.filter((record) => record.callStatus !== "Payment Done" && record.status !== "Closed" && record.status !== "Payment Clear").length)} />
                   <MetricCard icon={BellRing} label="Reminder Queue" value={String(reminderQueue.length)} />
                 </section>
 
@@ -2617,8 +2894,37 @@ function App() {
                           disabled={telegramTestLoading}
                           className="w-full rounded-2xl bg-slate-950 py-3 font-semibold text-white shadow-lg transition hover:bg-slate-800 disabled:bg-slate-300"
                         >
-                          {telegramTestLoading ? "Sending Notification..." : "Dispatch Alert Now"}
+                          {telegramTestLoading ? "Sending Notification..." : "Dispatch Test Alert Now"}
                         </button>
+
+                        <div className="border-t border-slate-100 mt-6 pt-6 space-y-3">
+                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                            Active Reminder Operations
+                          </label>
+                          <p className="text-xs text-slate-400 leading-relaxed">
+                            Manually scan and trigger pending customer follow-up alerts immediately, bypassing the local hour constraints.
+                          </p>
+                          
+                          {cronRunSuccess && (
+                            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-600 leading-normal">
+                              {cronRunSuccess}
+                            </div>
+                          )}
+                          {cronRunError && (
+                            <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-xs text-rose-500 leading-normal">
+                              {cronRunError}
+                            </div>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={handleRunCron}
+                            disabled={cronRunLoading}
+                            className="w-full rounded-2xl bg-cyan-600 py-3 font-semibold text-white shadow-lg transition hover:bg-cyan-700 disabled:bg-slate-300"
+                          >
+                            {cronRunLoading ? "Running Verification..." : "Run Active Reminders Check"}
+                          </button>
+                        </div>
                       </div>
                     </Panel>
                   </div>
@@ -2814,10 +3120,12 @@ function App() {
                               <div className="pt-2 border-t border-slate-100">
                                 <div className="text-xs text-slate-400 font-medium">Default Balance</div>
                                 <div className="text-2xl font-black text-rose-600 tracking-tight mt-0.5">
-                                  {formatCurrency(selectedUserRecord.defaultAmount)}
+                                  {formatCurrency(selectedUserGroupData ? selectedUserGroupData.totalDefaultAmount : selectedUserRecord.defaultAmount)}
                                 </div>
                                 <div className="text-[10px] text-slate-500 mt-0.5">
-                                  Total Loan: {formatCurrency(selectedUserRecord.loanAmount)}
+                                  Total Loan: {selectedUserGroupData
+                                    ? `${formatCurrency(selectedUserGroupData.totalLoanAmount)} / ${selectedUserGroupData.loanCount} ${selectedUserGroupData.loanCount === 1 ? 'loan' : 'loans'}`
+                                    : formatCurrency(selectedUserRecord.loanAmount)}
                                 </div>
                               </div>
 

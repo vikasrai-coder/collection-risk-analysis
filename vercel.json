@@ -20,5 +20,11 @@
       "source": "/(.*)",
       "destination": "/$1"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/reminders/cron-check",
+      "schedule": "*/30 * * * *"
+    }
   ]
 }
