@@ -573,9 +573,13 @@ async function checkAndSendTelegramReminders(force = false) {
     );
     const interactionLogs = logsResult.rows[0]?.payload || [];
 
+    // Get already sent reminders to prevent duplicates from UI state overwrites
+    const sentResult = await query(
+      "SELECT payload FROM app_state WHERE state_key = 'sent_reminders'"
+    );
+    const sentReminders = sentResult.rows[0]?.payload || [];
+
     const pendingReminders = records.filter(r => {
-      const needsApproach = r.callStatus === 'Call Back Later' || r.callStatus === 'Promise To Pay';
-      
       const isPastDate = r.followUpDate && r.followUpDate < todayStr;
       const isTodayDate = r.followUpDate && r.followUpDate === todayStr;
       
@@ -586,7 +590,11 @@ async function checkAndSendTelegramReminders(force = false) {
       
       const isDateOrTimeEligible = isPastDate || (isTodayDate && isTimeEligible);
       
-      return r.reminderEnabled && (needsApproach || isDateOrTimeEligible) && r.callStatus !== 'Payment Done';
+      // Build unique key for this reminder based on ID, date, and time
+      const reminderKey = `${r.id}-${r.followUpDate || 'no-date'}-${r.followUpTime || 'no-time'}`;
+      const isAlreadySent = sentReminders.includes(reminderKey);
+      
+      return r.reminderEnabled && isDateOrTimeEligible && r.callStatus !== 'Payment Done' && !isAlreadySent;
     });
 
     // Group pending reminders by userId to prevent invoice-wise duplicate notifications
@@ -686,6 +694,12 @@ async function checkAndSendTelegramReminders(force = false) {
             databaseUpdateNeeded = true;
           }
 
+          // Register sent reminder in persistent list to survive stale UI state overwrites
+          const reminderKey = `${origRec.id}-${origRec.followUpDate || 'no-date'}-${origRec.followUpTime || 'no-time'}`;
+          if (!sentReminders.includes(reminderKey)) {
+            sentReminders.push(reminderKey);
+          }
+
           // Append to Activity Timeline logs
           interactionLogs.push({
             id: `tele-rem-${origRec.id}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -706,7 +720,7 @@ async function checkAndSendTelegramReminders(force = false) {
       }
     }
 
-    // Save back the updated records and activity logs state if any reminder was successfully sent and marked false
+    // Save back the updated records, sent_reminders, and activity logs state if needed
     if (databaseUpdateNeeded) {
       await query(
         "INSERT INTO app_state (state_key, payload) VALUES ($1, $2) ON CONFLICT (state_key) DO UPDATE SET payload = EXCLUDED.payload",
@@ -714,9 +728,13 @@ async function checkAndSendTelegramReminders(force = false) {
       );
       await query(
         "INSERT INTO app_state (state_key, payload) VALUES ($1, $2) ON CONFLICT (state_key) DO UPDATE SET payload = EXCLUDED.payload",
+        ['sent_reminders', JSON.stringify(sentReminders)]
+      );
+      await query(
+        "INSERT INTO app_state (state_key, payload) VALUES ($1, $2) ON CONFLICT (state_key) DO UPDATE SET payload = EXCLUDED.payload",
         ['interaction_logs', JSON.stringify(interactionLogs)]
       );
-      console.log(`[Telegram Scheduler] Successfully updated database to clear dispatched reminders and record activity logs.`);
+      console.log(`[Telegram Scheduler] Successfully updated database to clear dispatched reminders, update sent_reminders, and record activity logs.`);
     }
 
   } catch (error) {

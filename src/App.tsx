@@ -1263,7 +1263,7 @@ function App() {
         remark: group.remark,
         followUpDate: group.followUpDate,
         followUpTime: group.followUpTime || "",
-        reminderEnabled: group.reminderEnabled || !!group.followUpDate,
+        reminderEnabled: group.reminderEnabled !== undefined && group.reminderEnabled !== null ? group.reminderEnabled : !!group.followUpDate,
       }
     );
   }
@@ -1584,7 +1584,7 @@ function App() {
           remark: paymentDone ? "Payment Done" : draft.remark,
           followUpDate: paymentDone ? "" : draft.followUpDate,
           followUpTime: paymentDone ? "" : draft.followUpTime || "",
-          reminderEnabled: paymentDone ? false : draft.reminderEnabled || !!draft.followUpDate,
+          reminderEnabled: paymentDone ? false : !!draft.reminderEnabled,
           updatedAt: timestamp,
           updatedBy: user?.email || "Agent",
         };
