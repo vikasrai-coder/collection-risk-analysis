@@ -1055,7 +1055,9 @@ function App() {
 
   const selectedUserRecord = useMemo(() => {
     if (!selectedUserId) return null;
-    return records.find((r) => r.userId === selectedUserId || r.loanId === selectedUserId);
+    const userRecords = records.filter((r) => r.userId === selectedUserId || r.loanId === selectedUserId);
+    if (userRecords.length === 0) return null;
+    return userRecords.find((r) => r.remark) || userRecords[0];
   }, [selectedUserId, records]);
 
   const selectedUserGroupData = useMemo(() => {
@@ -1093,13 +1095,13 @@ function App() {
           remark: selectedUserRecord.remark,
           followUpDate: selectedUserRecord.followUpDate,
           updatedAt: selectedUserRecord.updatedAt || selectedUserRecord.collectionDate || "2026-05-17T10:00:00Z",
-          updatedBy: "System Import"
+          updatedBy: (selectedUserRecord as any).updatedBy || user?.email || "System Import"
         });
       }
     }
 
     return logs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-  }, [selectedUserId, interactionLogs, selectedUserRecord]);
+  }, [selectedUserId, interactionLogs, selectedUserRecord, user]);
 
   const statusBreakdown = useMemo(() => {
     const source = new Map<string, number>();
@@ -1481,7 +1483,8 @@ function App() {
           followUpDate: paymentDone ? "" : draft.followUpDate,
           reminderEnabled: paymentDone ? false : draft.reminderEnabled,
           updatedAt: new Date().toISOString(),
-        };
+          updatedBy: user?.email || "Agent",
+        } as any;
         return updatedRecord;
       }),
     );
@@ -1529,6 +1532,7 @@ function App() {
           followUpDate: paymentDone ? "" : draft.followUpDate,
           reminderEnabled: paymentDone ? false : draft.reminderEnabled || !!draft.followUpDate,
           updatedAt: timestamp,
+          updatedBy: user?.email || "Agent",
         };
 
         newLogs.push({

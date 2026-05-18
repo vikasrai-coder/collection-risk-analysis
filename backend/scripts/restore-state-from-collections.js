@@ -48,8 +48,9 @@ async function restore() {
 
   // 3. Fetch followups
   const followupsRes = await localPool.query(`
-    SELECT customer_id, loan_id, remark, call_status, followup_date::text, is_reminder_enabled
-    FROM customer_followups
+    SELECT f.customer_id, f.loan_id, f.remark, f.call_status, f.followup_date::text, f.is_reminder_enabled, u.email as updated_by
+    FROM customer_followups f
+    LEFT JOIN users u ON f.created_by = u.id
   `);
   const followupsMap = new Map(followupsRes.rows.map(f => [`${f.customer_id}__${f.loan_id}`, f]));
   console.log(`  Found ${followupsRes.rows.length} followups.`);
@@ -66,7 +67,7 @@ async function restore() {
   const records = [];
   for (const c of collections) {
     const profile = profilesMap.get(c.customer_id) || {};
-    const followup = followupsMap.get(`${c.customer_id}__${c.loan_id}`) || {};
+    const followup = followupsMap.get(`${c.customer_id}__${c.loan_id}`) || followupsMap.get(`${c.customer_id}__`) || {};
     const risk = riskMap.get(c.customer_id) || {};
 
     const amountNum = parseFloat(c.amount) || 0;
@@ -91,7 +92,8 @@ async function restore() {
       remark: followup.remark || '',
       followUpDate: followup.followup_date || '',
       reminderEnabled: followup.is_reminder_enabled ?? false,
-      updatedAt: c.updated_at || new Date().toISOString()
+      updatedAt: c.updated_at || new Date().toISOString(),
+      updatedBy: followup.updated_by || 'System Import'
     });
   }
 
