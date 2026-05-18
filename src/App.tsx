@@ -48,6 +48,7 @@ type CollectionRecord = {
   callStatus: string;
   remark: string;
   followUpDate: string;
+  followUpTime?: string;
   reminderEnabled: boolean;
   updatedAt: string;
 };
@@ -72,6 +73,7 @@ type InteractionHistoryItem = {
   callStatus: string;
   remark: string;
   followUpDate: string;
+  followUpTime?: string;
   updatedAt: string;
   updatedBy: string;
 };
@@ -91,6 +93,7 @@ type Draft = {
   callStatus: string;
   remark: string;
   followUpDate: string;
+  followUpTime?: string;
   reminderEnabled: boolean;
 };
 
@@ -106,6 +109,7 @@ type FollowupGroup = {
   callStatus: string;
   remark: string;
   followUpDate: string;
+  followUpTime?: string;
   reminderEnabled: boolean;
   totalLoanAmount: number;
   totalDefaultAmount: number;
@@ -313,6 +317,31 @@ function formatDate(value: string) {
     month: "short",
     year: "numeric",
   }).format(date);
+}
+
+function formatDateTime(dateVal: string, timeVal?: string) {
+  if (!dateVal) return "-";
+  const date = new Date(dateVal);
+  const formattedDate = Number.isNaN(date.getTime())
+    ? dateVal
+    : new Intl.DateTimeFormat("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      }).format(date);
+
+  if (timeVal) {
+    const parts = timeVal.split(":");
+    const h = parseInt(parts[0], 10);
+    if (!isNaN(h)) {
+      const ampm = h >= 12 ? "PM" : "AM";
+      const displayHour = h % 12 || 12;
+      const displayMin = parts[1] || "00";
+      return `${formattedDate} at ${displayHour}:${displayMin} ${ampm}`;
+    }
+    return `${formattedDate} at ${timeVal}`;
+  }
+  return formattedDate;
 }
 
 function slug() {
@@ -728,16 +757,13 @@ function App() {
     e.preventDefault();
     setTelegramSaveSuccess("");
     try {
-      const response = await fetch(`${API_BASE_URL}/api/state`, {
+      const response = await fetch(`${API_BASE_URL}/api/telegram-settings`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...getAuthHeader()
         },
         body: JSON.stringify({
-          records,
-          history: uploadHistory,
-          interaction_logs: interactionLogs,
           telegram_settings: telegramSettings
         }),
       });
@@ -1189,7 +1215,10 @@ function App() {
         existing.totalDefaultAmount += record.defaultAmount;
         existing.loanCount += 1;
         if (!existing.remark && record.remark) existing.remark = record.remark;
-        if (!existing.followUpDate && record.followUpDate) existing.followUpDate = record.followUpDate;
+        if (!existing.followUpDate && record.followUpDate) {
+          existing.followUpDate = record.followUpDate;
+          existing.followUpTime = record.followUpTime;
+        }
         if (!existing.mobile && record.mobile) existing.mobile = record.mobile;
         if (!existing.alternateNumber && record.alternateNumber) existing.alternateNumber = record.alternateNumber;
         if (!existing.anchor && record.anchor) existing.anchor = record.anchor;
@@ -1208,6 +1237,7 @@ function App() {
           callStatus: record.callStatus || "Pending",
           remark: record.remark,
           followUpDate: record.followUpDate,
+          followUpTime: record.followUpTime || "",
           reminderEnabled: record.reminderEnabled,
           totalLoanAmount: record.loanAmount,
           totalDefaultAmount: record.defaultAmount,
@@ -1230,6 +1260,7 @@ function App() {
         callStatus: group.callStatus || "Pending",
         remark: group.remark,
         followUpDate: group.followUpDate,
+        followUpTime: group.followUpTime || "",
         reminderEnabled: group.reminderEnabled || !!group.followUpDate,
       }
     );
@@ -1471,6 +1502,7 @@ function App() {
         callStatus: record.callStatus || "Pending",
         remark: record.remark,
         followUpDate: record.followUpDate,
+        followUpTime: record.followUpTime || "",
         reminderEnabled: record.reminderEnabled,
       },
     }));
@@ -1498,6 +1530,7 @@ function App() {
           callStatus: draft.callStatus,
           remark: paymentDone ? "Payment Done" : draft.remark,
           followUpDate: paymentDone ? "" : draft.followUpDate,
+          followUpTime: paymentDone ? "" : draft.followUpTime || "",
           reminderEnabled: paymentDone ? false : draft.reminderEnabled,
           updatedAt: new Date().toISOString(),
           updatedBy: user?.email || "Agent",
@@ -1516,6 +1549,7 @@ function App() {
         callStatus: rec.callStatus,
         remark: rec.remark,
         followUpDate: rec.followUpDate,
+        followUpTime: rec.followUpTime || "",
         updatedAt: rec.updatedAt,
         updatedBy: user?.email || "Agent",
       };
@@ -1547,6 +1581,7 @@ function App() {
           callStatus: draft.callStatus,
           remark: paymentDone ? "Payment Done" : draft.remark,
           followUpDate: paymentDone ? "" : draft.followUpDate,
+          followUpTime: paymentDone ? "" : draft.followUpTime || "",
           reminderEnabled: paymentDone ? false : draft.reminderEnabled || !!draft.followUpDate,
           updatedAt: timestamp,
           updatedBy: user?.email || "Agent",
@@ -1560,6 +1595,7 @@ function App() {
           callStatus: updated.callStatus,
           remark: updated.remark,
           followUpDate: updated.followUpDate,
+          followUpTime: updated.followUpTime || "",
           updatedAt: timestamp,
           updatedBy: user?.email || "Agent",
         });
@@ -2246,7 +2282,7 @@ function App() {
 
             {activePage === "followup" && (
               <>
-                <section className="grid gap-4 md:grid-cols-4">
+                <section className="hidden md:grid gap-4 md:grid-cols-4">
                   <MetricCard
                     icon={PhoneCall}
                     label="Handled Today"
@@ -2439,7 +2475,14 @@ function App() {
                                       disabled={locked || draft.callStatus === "Payment Done"}
                                       value={draft.followUpDate || ""}
                                       onChange={(event) => updateFollowupDraft(group, { followUpDate: event.target.value })}
-                                      className="rounded-xl border border-slate-200 px-3 py-2 disabled:bg-slate-100"
+                                      className="w-40 rounded-xl border border-slate-200 px-3 py-2 disabled:bg-slate-100 block"
+                                    />
+                                    <input
+                                      type="time"
+                                      disabled={locked || draft.callStatus === "Payment Done"}
+                                      value={draft.followUpTime || ""}
+                                      onChange={(event) => updateFollowupDraft(group, { followUpTime: event.target.value })}
+                                      className="w-40 rounded-xl border border-slate-200 px-3 py-2 disabled:bg-slate-100 block mt-1.5"
                                     />
                                     <label className="flex items-center gap-2 text-xs text-slate-600">
                                       <input
@@ -2453,8 +2496,8 @@ function App() {
                                   </div>
                                 ) : (
                                   <div>
-                                    <div>{formatDate(group.followUpDate)}</div>
-                                    <div className="text-xs text-slate-500">{group.reminderEnabled ? "Reminder on" : "Reminder off"}</div>
+                                    <div className="font-semibold text-slate-800">{formatDateTime(group.followUpDate, group.followUpTime)}</div>
+                                    <div className="text-xs text-slate-500">{group.reminderEnabled ? "Reminder active" : "Reminder off"}</div>
                                   </div>
                                 )}
                               </td>
@@ -2507,45 +2550,76 @@ function App() {
                       return (
                         <div
                           key={group.groupKey}
-                          className={`rounded-2xl border border-slate-200 bg-white p-4 ${draft.callStatus === "Payment Done" ? "bg-emerald-50" : ""}`}
+                          className={`relative overflow-hidden rounded-3xl border-2 bg-white p-5 transition-all duration-300 shadow-md ${
+                            draft.callStatus === "Payment Done"
+                              ? "border-emerald-500 bg-gradient-to-br from-emerald-50/40 via-white to-white"
+                              : draft.callStatus === "Promise To Pay"
+                              ? "border-amber-300"
+                              : "border-slate-200/80"
+                          }`}
                         >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <div className="text-sm font-semibold">{group.userId}</div>
-                              <div className="text-sm text-slate-600">{group.customerName || "-"}</div>
-                              <div className="mt-1 text-xs text-slate-500">{group.lender}</div>
-                              <div className="mt-1 text-xs text-slate-500">{group.anchor || "-"}</div>
+                          {/* Card Header Segment */}
+                          <div className="flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                            <div className="flex items-center gap-3">
+                              <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-tr text-xs font-bold text-white shadow-sm ${
+                                draft.callStatus === "Payment Done" ? "from-emerald-400 to-teal-500" : "from-cyan-500 to-blue-600"
+                              }`}>
+                                {(group.customerName || group.userId || "U").slice(0, 2).toUpperCase()}
+                              </div>
+                              <div>
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block leading-none mb-1">Customer / ID</span>
+                                <div className="text-sm font-black text-slate-900 leading-tight">{group.customerName || "-"}</div>
+                                <div className="text-xs font-semibold text-slate-500">{group.userId}</div>
+                              </div>
                             </div>
                             {!editing && !followupEditMode ? (
                               <button
                                 onClick={() => beginFollowupEdit(group)}
                                 disabled={locked}
-                                className="rounded-xl border border-slate-200 px-3 py-2 text-xs disabled:bg-slate-100"
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 px-3.5 py-1.5 text-xs font-bold text-slate-700 transition disabled:opacity-50"
                               >
+                                <Pencil className="h-3.5 w-3.5 text-slate-500" />
                                 {locked ? "Locked" : "Edit"}
                               </button>
                             ) : null}
                           </div>
 
-                          <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                            <div className="rounded-xl bg-slate-50 p-3">
-                              <div className="text-xs text-slate-500">Default</div>
-                              <div className="mt-1 font-semibold">{formatCurrency(group.totalDefaultAmount)}</div>
+                          {/* Lender & Anchor Segment */}
+                          <div className="mt-3 grid grid-cols-2 gap-4 text-xs">
+                            <div>
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">Lender</span>
+                              <span className="font-semibold text-slate-800">{group.lender}</span>
                             </div>
-                            <div className="rounded-xl bg-slate-50 p-3">
-                              <div className="text-xs text-slate-500">Loans</div>
-                              <div className="mt-1 font-semibold">{group.loanCount}</div>
+                            <div>
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">Anchor Partner</span>
+                              <span className="font-semibold text-slate-800">{group.anchor || "-"}</span>
                             </div>
                           </div>
 
-                          <div className="mt-3 space-y-2 rounded-xl bg-slate-50 p-3">
+                          {/* Financial Exposure Segment */}
+                          <div className="mt-4 grid grid-cols-2 gap-3">
+                            <div className="rounded-2xl bg-slate-50 p-3.5 border border-slate-100">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total Default</span>
+                              <span className="mt-1 block text-base font-black text-slate-900 leading-none">{formatCurrency(group.totalDefaultAmount)}</span>
+                            </div>
+                            <div className="rounded-2xl bg-slate-50 p-3.5 border border-slate-100">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total Loans</span>
+                              <span className="mt-1 block text-base font-black text-slate-900 leading-none">{group.loanCount}</span>
+                            </div>
+                          </div>
+
+                          {/* Direct Action Contacts Segment */}
+                          <div className="mt-4 space-y-2.5 rounded-2xl bg-slate-50/50 p-3.5 border border-slate-100/80">
                             {group.mobile ? (
-                              <div className="flex items-center justify-between">
-                                <div className="text-sm font-semibold">{group.mobile}</div>
+                              <div className="flex items-center justify-between gap-2">
+                                <div>
+                                  <span className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block mb-0.5">Primary Contact</span>
+                                  <span className="text-sm font-bold text-slate-800">{group.mobile}</span>
+                                </div>
                                 <div className="flex gap-2">
                                   <a
                                     href={`tel:${group.mobile}`}
-                                    className="rounded-xl border border-slate-200 bg-white p-2 text-slate-700 hover:bg-slate-100 transition"
+                                    className="flex h-10 w-10 items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 active:scale-95 transition shadow-sm"
                                     title="Call Primary"
                                   >
                                     <Phone className="h-4 w-4" />
@@ -2554,7 +2628,7 @@ function App() {
                                     href={getWhatsAppLink(group.mobile)}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="rounded-xl border border-slate-200 bg-white p-2 text-emerald-700 hover:bg-emerald-50 transition"
+                                    className="flex h-10 w-10 items-center justify-center rounded-xl bg-white border border-emerald-200 text-emerald-600 hover:bg-emerald-50 active:scale-95 transition shadow-sm"
                                     title="WhatsApp Primary"
                                   >
                                     <MessageCircle className="h-4 w-4" />
@@ -2562,103 +2636,137 @@ function App() {
                                 </div>
                               </div>
                             ) : (
-                              <div className="text-sm text-slate-400">-</div>
+                              <div className="text-xs text-slate-400 italic">No primary number listed</div>
                             )}
 
                             {group.alternateNumber ? (
-                              <div className="flex items-center justify-between border-t border-slate-200/50 pt-2">
-                                <div className="text-xs text-slate-500">{group.alternateNumber} (Alt)</div>
+                              <div className="flex items-center justify-between gap-2 border-t border-slate-200/60 pt-2.5">
+                                <div>
+                                  <span className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block mb-0.5">Alternate Contact</span>
+                                  <span className="text-xs font-semibold text-slate-600">{group.alternateNumber}</span>
+                                </div>
                                 <div className="flex gap-2">
                                   <a
                                     href={`tel:${group.alternateNumber}`}
-                                    className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-100 transition"
+                                    className="flex h-9 w-9 items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-500 hover:bg-slate-100 active:scale-95 transition shadow-sm"
                                     title="Call Alternate"
                                   >
-                                    <Phone className="h-4 w-4" />
+                                    <Phone className="h-3.5 w-3.5" />
                                   </a>
                                   <a
                                     href={getWhatsAppLink(group.alternateNumber)}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="rounded-xl border border-slate-200 bg-white p-2 text-emerald-600 hover:bg-emerald-50 transition"
+                                    className="flex h-9 w-9 items-center justify-center rounded-xl bg-white border border-slate-200 text-emerald-600 hover:bg-emerald-50 active:scale-95 transition shadow-sm"
                                     title="WhatsApp Alternate"
                                   >
-                                    <MessageCircle className="h-4 w-4" />
+                                    <MessageCircle className="h-3.5 w-3.5" />
                                   </a>
                                 </div>
                               </div>
                             ) : null}
                           </div>
 
+                          {/* Remarks / Action Editing Form Segment */}
                           {editing ? (
-                            <div className="mt-4 space-y-3">
+                            <div className="mt-4 border-t border-slate-100 pt-4 space-y-4">
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Customer Name</label>
+                                  <input
+                                    type="text"
+                                    value={draft.customerName || ""}
+                                    onChange={(e) => updateFollowupDraft(group, { customerName: e.target.value })}
+                                    className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 text-xs outline-none focus:border-cyan-400 focus:bg-white transition"
+                                    placeholder="Customer Name"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Anchor Partner</label>
+                                  <input
+                                    type="text"
+                                    value={draft.anchor || ""}
+                                    onChange={(e) => updateFollowupDraft(group, { anchor: e.target.value })}
+                                    className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 text-xs outline-none focus:border-cyan-400 focus:bg-white transition"
+                                    placeholder="Anchor Partner"
+                                  />
+                                </div>
+                              </div>
+
                               <div className="space-y-1">
-                                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">Customer Name</label>
-                                <input
-                                  type="text"
-                                  value={draft.customerName || ""}
-                                  onChange={(e) => updateFollowupDraft(group, { customerName: e.target.value })}
-                                  className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-cyan-400"
-                                  placeholder="Customer Name"
+                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Call Status</label>
+                                <select
+                                  value={draft.callStatus || "Pending"}
+                                  disabled={locked}
+                                  onChange={(event) => updateFollowupDraft(group, { callStatus: event.target.value })}
+                                  className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 text-xs focus:border-cyan-400 focus:bg-white transition"
+                                >
+                                  {callStatuses.map((status) => (
+                                    <option key={status} value={status}>
+                                      {status}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Remarks / Notes</label>
+                                <textarea
+                                  value={draft.remark || ""}
+                                  disabled={locked || draft.callStatus === "Payment Done"}
+                                  onChange={(event) => updateFollowupDraft(group, { remark: event.target.value })}
+                                  className="min-h-16 w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2 text-xs outline-none focus:border-cyan-400 focus:bg-white transition disabled:bg-slate-100"
+                                  placeholder="Add call remarks here..."
                                 />
                               </div>
-                              <div className="space-y-1">
-                                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">Anchor</label>
-                                <input
-                                  type="text"
-                                  value={draft.anchor || ""}
-                                  onChange={(e) => updateFollowupDraft(group, { anchor: e.target.value })}
-                                  className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-cyan-400"
-                                  placeholder="Anchor"
-                                />
+
+                              {/* Side-by-Side Date and Time Picker */}
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Reminder Date</label>
+                                  <input
+                                    type="date"
+                                    disabled={locked || draft.callStatus === "Payment Done"}
+                                    value={draft.followUpDate || ""}
+                                    onChange={(event) => updateFollowupDraft(group, { followUpDate: event.target.value })}
+                                    className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 text-xs disabled:bg-slate-100"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Reminder Time</label>
+                                  <input
+                                    type="time"
+                                    disabled={locked || draft.callStatus === "Payment Done"}
+                                    value={draft.followUpTime || ""}
+                                    onChange={(event) => updateFollowupDraft(group, { followUpTime: event.target.value })}
+                                    className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 text-xs disabled:bg-slate-100"
+                                  />
+                                </div>
                               </div>
-                              <select
-                                value={draft.callStatus || "Pending"}
-                                disabled={locked}
-                                onChange={(event) => updateFollowupDraft(group, { callStatus: event.target.value })}
-                                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm"
-                              >
-                                {callStatuses.map((status) => (
-                                  <option key={status} value={status}>
-                                    {status}
-                                  </option>
-                                ))}
-                              </select>
-                              <textarea
-                                value={draft.remark || ""}
-                                disabled={locked || draft.callStatus === "Payment Done"}
-                                onChange={(event) => updateFollowupDraft(group, { remark: event.target.value })}
-                                className="min-h-24 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm disabled:bg-slate-100"
-                                placeholder="Remarks"
-                              />
-                              <input
-                                type="date"
-                                disabled={locked || draft.callStatus === "Payment Done"}
-                                value={draft.followUpDate || ""}
-                                onChange={(event) => updateFollowupDraft(group, { followUpDate: event.target.value })}
-                                className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm disabled:bg-slate-100"
-                              />
-                              <label className="flex items-center gap-2 text-sm text-slate-600">
+
+                              <label className="flex items-center gap-2 text-xs text-slate-600 font-semibold select-none">
                                 <input
                                   type="checkbox"
                                   disabled={locked || draft.callStatus === "Payment Done"}
                                   checked={draft.reminderEnabled || false}
                                   onChange={(event) => updateFollowupDraft(group, { reminderEnabled: event.target.checked })}
+                                  className="rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
                                 />
-                                Reminder on
+                                <span>Toggle Automated Alert</span>
                               </label>
-                              <div className="flex gap-2">
+
+                              <div className="flex gap-3 pt-2">
                                 <button
                                   onClick={() => submitFollowupEdit(group)}
                                   disabled={locked}
-                                  className="flex-1 rounded-xl bg-slate-950 px-4 py-3 text-sm text-white disabled:bg-slate-300"
+                                  className="flex-1 rounded-xl bg-slate-900 hover:bg-slate-950 text-white font-bold py-2.5 text-xs transition active:scale-95 disabled:bg-slate-300"
                                 >
                                   Save
                                 </button>
                                 {!followupEditMode ? (
                                   <button
                                     onClick={() => cancelFollowupEdit(group.groupKey)}
-                                    className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                                    className="flex-1 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold py-2.5 text-xs transition active:scale-95"
                                   >
                                     Cancel
                                   </button>
@@ -2666,11 +2774,41 @@ function App() {
                               </div>
                             </div>
                           ) : (
-                            <div className="mt-4 space-y-2 text-sm">
-                              <StatusPill value={group.callStatus || "Pending"} />
-                              <div className="text-slate-600">{group.remark || "-"}</div>
-                              <div className="text-slate-500">{formatDate(group.followUpDate)}</div>
-                              <div className="text-xs text-slate-500">{group.reminderEnabled ? "Reminder on" : "Reminder off"}</div>
+                            <div className="mt-4 border-t border-slate-100 pt-4 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current Status</span>
+                                <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                                  group.callStatus === "Payment Done" ? "bg-emerald-100 text-emerald-800" :
+                                  group.callStatus === "Promise To Pay" ? "bg-amber-100 text-amber-800" :
+                                  group.callStatus === "Call Back Later" ? "bg-sky-100 text-sky-800" :
+                                  group.callStatus === "Wrong Number" || group.callStatus === "Switched Off" ? "bg-rose-100 text-rose-800" :
+                                  "bg-slate-100 text-slate-800"
+                                }`}>
+                                  {group.callStatus || "Pending"}
+                                </span>
+                              </div>
+
+                              {group.remark && (
+                                <div className="rounded-2xl bg-slate-50 p-3 border border-slate-100 text-xs text-slate-700">
+                                  <span className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block mb-1">Remarks</span>
+                                  <p className="font-medium">{group.remark}</p>
+                                </div>
+                              )}
+
+                              {group.followUpDate && (
+                                <div className="flex items-center gap-2.5 rounded-2xl bg-cyan-50/50 p-3 border border-cyan-100/50 text-xs text-slate-700">
+                                  <Clock3 className="h-4 w-4 text-cyan-600 shrink-0" />
+                                  <div className="flex-1">
+                                    <span className="text-[9px] font-extrabold uppercase tracking-wider text-cyan-600 block">Scheduled Callback</span>
+                                    <span className="font-bold text-slate-800">{formatDateTime(group.followUpDate, group.followUpTime)}</span>
+                                  </div>
+                                  {group.reminderEnabled && (
+                                    <span className="inline-flex items-center rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] font-bold text-cyan-800">
+                                      Alert Active
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>

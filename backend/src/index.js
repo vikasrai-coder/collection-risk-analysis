@@ -455,6 +455,29 @@ app.post('/api/state', async (req, res) => {
   }
 });
 
+// Dedicated fast Telegram Settings saving endpoint
+app.post('/api/telegram-settings', async (req, res) => {
+  const { telegram_settings } = req.body || {};
+  if (!telegram_settings) {
+    return res.status(400).json({ message: 'telegram_settings is required' });
+  }
+
+  try {
+    await query(
+      `
+      INSERT INTO app_state (state_key, payload, updated_at)
+      VALUES ($1, $2::jsonb, NOW())
+      ON CONFLICT (state_key)
+      DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
+      `,
+      ['telegram_settings', JSON.stringify(telegram_settings)],
+    );
+    res.json({ ok: true, message: 'Telegram settings updated successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Direct Test Alert Endpoint
 app.post('/api/reminders/send-test', async (req, res) => {
   const { botToken, chatId, message } = req.body || {};
