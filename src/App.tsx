@@ -22,6 +22,7 @@ import {
   Key,
   Mail,
   X,
+  Menu,
   Calendar,
   FileText,
 } from "lucide-react";
@@ -134,8 +135,23 @@ const callStatuses = [
   "Switched Off",
   "Wrong Number",
   "Dispute",
-  "Refused To Pay",
 ];
+
+function getWhatsAppLink(phone: string) {
+  if (!phone) return "";
+  const cleanPhone = phone.replace(/\D/g, "");
+  // If it already starts with a country code (like 91) and is at least 11 digits, don't prefix it with 91.
+  const phoneWithCountry = cleanPhone.startsWith("91") && cleanPhone.length > 10 ? cleanPhone : `91${cleanPhone}`;
+  
+  // Check if user agent is mobile
+  const isMobile = typeof window !== 'undefined' && 
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    
+  if (isMobile) {
+    return `whatsapp://send?phone=${phoneWithCountry}`;
+  }
+  return `https://web.whatsapp.com/send?phone=${phoneWithCountry}`;
+}
 
 const seedRecords: CollectionRecord[] = [
   {
@@ -493,6 +509,7 @@ function App() {
 
   // App core states
   const [activePage, setActivePage] = useState<Page>("dashboard");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [records, setRecords] = useState<CollectionRecord[]>([]);
   const [uploadHistory, setUploadHistory] = useState<UploadHistory[]>([]);
   const [search, setSearch] = useState("");
@@ -1786,6 +1803,78 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-950">
+      {/* Mobile Drawer Overlay */}
+      {mobileMenuOpen && (
+        <div className="fixed inset-0 z-50 flex lg:hidden">
+          {/* Backdrop */}
+          <div 
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm transition-opacity duration-300"
+            onClick={() => setMobileMenuOpen(false)}
+          />
+          
+          {/* Drawer Content */}
+          <div className="relative flex w-full max-w-xs flex-col bg-slate-950 text-white p-6 shadow-2xl animate-slide-in">
+            <div className="flex items-center justify-between border-b border-white/10 pb-5 mb-5">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-400 text-slate-950 shadow-md">
+                  <Database className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Collection Risk</p>
+                  <h1 className="text-base font-bold">Ops Console</h1>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(false)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 text-slate-300 hover:bg-white/10 transition"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <nav className="flex-1 space-y-1.5">
+              {navItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = activePage === item.key;
+                return (
+                  <button
+                    key={item.key}
+                    onClick={() => {
+                      setActivePage(item.key);
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left transition ${
+                      isActive
+                        ? "bg-cyan-400 text-slate-950 font-bold shadow-lg"
+                        : "text-slate-300 hover:bg-white/5 hover:text-white"
+                    }`}
+                  >
+                    <Icon className="h-4.5 w-4.5" />
+                    <span className="text-sm font-medium">{item.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+
+            <div className="border-t border-white/10 pt-5 mt-auto">
+              <div className="rounded-xl bg-white/5 p-3.5 text-xs text-slate-300">
+                <p className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Logged in as</p>
+                <p className="mt-1 font-semibold truncate" title={user.email}>{user.email}</p>
+                <p className="text-[10px] text-cyan-400 capitalize mt-0.5">{user.role}</p>
+                <button
+                  onClick={handleLogout}
+                  className="mt-3.5 flex w-full items-center justify-center gap-2 rounded-lg bg-rose-600 py-2.5 text-xs font-semibold text-white transition hover:bg-rose-700"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  Sign Out
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex min-h-screen">
         <aside className="hidden w-72 shrink-0 flex-col border-r border-slate-200 bg-slate-950 text-white lg:flex">
           <div className="border-b border-white/10 px-6 py-6">
@@ -1836,11 +1925,22 @@ function App() {
         <main className="flex-1">
           <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
             <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-4 md:px-8">
-              <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Collection Risk</p>
-                <h2 className="text-2xl font-bold tracking-tight">
-                  {navItems.find((item) => item.key === activePage)?.label}
-                </h2>
+              <div className="flex items-center gap-3">
+                {/* Mobile Menu Toggle Button */}
+                <button
+                  type="button"
+                  onClick={() => setMobileMenuOpen(true)}
+                  className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 active:scale-95 transition lg:hidden cursor-pointer"
+                  aria-label="Open navigation menu"
+                >
+                  <Menu className="h-5 w-5" />
+                </button>
+                <div>
+                  <p className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Collection Risk</p>
+                  <h2 className="text-2xl font-bold tracking-tight">
+                    {navItems.find((item) => item.key === activePage)?.label}
+                  </h2>
+                </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
@@ -1889,6 +1989,40 @@ function App() {
             )}
             {activePage === "dashboard" && (
               <>
+                {/* Responsive Quick Navigation Hub */}
+                <div className="block lg:hidden mb-6">
+                  <div className="bg-slate-900 text-white rounded-3xl border border-white/10 p-6 shadow-2xl relative overflow-hidden">
+                    <div className="absolute top-[-20%] right-[-20%] w-[40%] h-[40%] rounded-full bg-cyan-500/10 blur-[80px]" />
+                    <h3 className="text-base font-bold tracking-tight text-white mb-1 flex items-center gap-2">
+                      <LayoutDashboard className="h-4.5 w-4.5 text-cyan-400" />
+                      Quick Navigation Hub
+                    </h3>
+                    <p className="text-[11px] text-slate-400 mb-5">Tap any section to redirect instantly</p>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      {navItems.map((item) => {
+                        const Icon = item.icon;
+                        return (
+                          <button
+                            key={item.key}
+                            onClick={() => {
+                              setActivePage(item.key);
+                              setMobileMenuOpen(false);
+                            }}
+                            className="group flex flex-col items-start p-4 rounded-2xl border bg-white/5 border-white/10 text-slate-200 hover:bg-white/10 hover:border-white/20 active:scale-[0.98] transition cursor-pointer text-left"
+                          >
+                            <div className="p-2.5 rounded-xl mb-3 bg-white/10 text-white group-hover:bg-cyan-400 group-hover:text-slate-950 transition-all duration-300">
+                              <Icon className="h-5 w-5" />
+                            </div>
+                            <span className="text-sm font-semibold tracking-tight leading-none text-white">{item.label}</span>
+                            <span className="text-[10px] text-slate-400 mt-1 font-medium group-hover:text-slate-300">Go to section →</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
                 <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
                   <MetricCard icon={Database} label="Total Loan Amount" value={formatCurrency(summary.totalLoanAmount)} />
                   <MetricCard icon={ArrowUpRight} label="Default Amount" value={formatCurrency(summary.totalDefaultAmount)} />
@@ -2225,7 +2359,7 @@ function App() {
                                           <Phone className="h-3.5 w-3.5" />
                                         </a>
                                         <a
-                                          href={`https://wa.me/91${group.mobile}`}
+                                          href={getWhatsAppLink(group.mobile)}
                                           target="_blank"
                                           rel="noreferrer"
                                           className="rounded-lg border border-slate-200 p-1 text-emerald-700 hover:bg-emerald-50 transition"
@@ -2250,7 +2384,7 @@ function App() {
                                           <Phone className="h-3.5 w-3.5" />
                                         </a>
                                         <a
-                                          href={`https://wa.me/91${group.alternateNumber}`}
+                                          href={getWhatsAppLink(group.alternateNumber)}
                                           target="_blank"
                                           rel="noreferrer"
                                           className="rounded-lg border border-slate-200 p-1 text-emerald-600 hover:bg-emerald-50 transition"
@@ -2417,7 +2551,7 @@ function App() {
                                     <Phone className="h-4 w-4" />
                                   </a>
                                   <a
-                                    href={`https://wa.me/91${group.mobile}`}
+                                    href={getWhatsAppLink(group.mobile)}
                                     target="_blank"
                                     rel="noreferrer"
                                     className="rounded-xl border border-slate-200 bg-white p-2 text-emerald-700 hover:bg-emerald-50 transition"
@@ -2443,7 +2577,7 @@ function App() {
                                     <Phone className="h-4 w-4" />
                                   </a>
                                   <a
-                                    href={`https://wa.me/91${group.alternateNumber}`}
+                                    href={getWhatsAppLink(group.alternateNumber)}
                                     target="_blank"
                                     rel="noreferrer"
                                     className="rounded-xl border border-slate-200 bg-white p-2 text-emerald-600 hover:bg-emerald-50 transition"
@@ -2588,7 +2722,7 @@ function App() {
                                         <Phone className="h-3 w-3" />
                                       </a>
                                       <a
-                                        href={`https://wa.me/91${customer.mobile}`}
+                                        href={getWhatsAppLink(customer.mobile)}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="rounded border border-slate-200 p-0.5 text-emerald-700 hover:bg-emerald-50 transition"
@@ -2613,7 +2747,7 @@ function App() {
                                         <Phone className="h-3 w-3" />
                                       </a>
                                       <a
-                                        href={`https://wa.me/91${customer.alternateNumber}`}
+                                        href={getWhatsAppLink(customer.alternateNumber)}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="rounded border border-slate-200 p-0.5 text-emerald-600 hover:bg-emerald-50 transition"
@@ -3148,7 +3282,7 @@ function App() {
                                         <Phone className="h-4 w-4" />
                                       </a>
                                       <a
-                                        href={`https://wa.me/91${selectedUserRecord.mobile}`}
+                                        href={getWhatsAppLink(selectedUserRecord.mobile)}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="rounded-xl border border-slate-200 bg-white p-2 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition"
@@ -3175,7 +3309,7 @@ function App() {
                                         <Phone className="h-4 w-4" />
                                       </a>
                                       <a
-                                        href={`https://wa.me/91${selectedUserRecord.alternateNumber}`}
+                                        href={getWhatsAppLink(selectedUserRecord.alternateNumber)}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="rounded-xl border border-slate-200 bg-white p-2 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition"
