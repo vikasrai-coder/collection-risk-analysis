@@ -239,6 +239,15 @@ function normalizePhone(value: string) {
   return trimmed.replace(/[^0-9]/g, "");
 }
 
+function getBaseLoanId(loanId: string): string {
+  if (!loanId) return "";
+  const parts = loanId.split("-");
+  if (parts.length >= 2) {
+    return `${parts[0]}-${parts[1]}`.trim();
+  }
+  return loanId.trim();
+}
+
 function normalizedText(value: string) {
   return value.trim().replace(/\s+/g, " ");
 }
@@ -253,7 +262,7 @@ function restrictToAllowedLenders(records: CollectionRecord[]) {
 
 function makeLoanKey(row: Record<string, unknown>) {
   const direct = valueFromRow(row, ["loanId", "loan_id"]);
-  if (direct) return direct;
+  if (direct) return getBaseLoanId(direct);
 
   const fallbacks = [
     valueFromRow(row, ["invoiceId", "invoice_id"]),
@@ -263,12 +272,12 @@ function makeLoanKey(row: Record<string, unknown>) {
     valueFromRow(row, ["uuid"]),
   ].filter(Boolean);
 
-  if (fallbacks.length) return fallbacks.join("-");
+  if (fallbacks.length) return getBaseLoanId(fallbacks.join("-"));
 
   const userId = valueFromRow(row, ["userId", "user_id", "customer_id", "customerId"]);
   const date = valueFromRow(row, ["collectionDate", "date", "transactionDate", "collectionDateStr"]);
   const instalmentNo = valueFromRow(row, ["instalmentNo", "installmentNo"]);
-  return [userId, date, instalmentNo].filter(Boolean).join("-") || `generated-${slug()}`;
+  return getBaseLoanId([userId, date, instalmentNo].filter(Boolean).join("-")) || `generated-${slug()}`;
 }
 
 function formatCurrency(value: number) {
@@ -1230,7 +1239,7 @@ function App() {
         let matchedWithoutLoanId = 0;
         const current = records;
         const baseRecords = isSeedOnly(current) ? [] : current;
-        const byLoanId = new Map(baseRecords.map((record) => [record.loanId || record.id, { ...record }]));
+        const byLoanId = new Map(baseRecords.map((record) => [getBaseLoanId(record.loanId) || record.id, { ...record }]));
         const nextByLoanId = new Map(byLoanId);
         const newLogs: InteractionHistoryItem[] = [];
 
@@ -1269,10 +1278,6 @@ function App() {
           const existing = nextByLoanId.get(loanId);
           if (existing) {
             if (!valueFromRow(row, ["loanId", "loan_id"])) matchedWithoutLoanId += 1;
-            
-            const finalCallStatus = csvCallStatus || existing.callStatus || "Pending";
-            const finalRemark = csvRemark || existing.remark || "";
-            const finalFollowUpDate = csvFollowUpDate || existing.followUpDate || "";
 
             const updatedRec = {
               ...existing,
@@ -1290,30 +1295,15 @@ function App() {
               collectionDate,
               riskScore,
               paymentProbability,
-              callStatus: finalCallStatus,
-              remark: finalRemark,
-              followUpDate: finalFollowUpDate,
-              reminderEnabled: !!finalFollowUpDate,
+              // Keep call details completely user-driven!
+              callStatus: existing.callStatus || "Pending",
+              remark: existing.remark || "",
+              followUpDate: existing.followUpDate || "",
+              reminderEnabled: existing.reminderEnabled ?? false,
               updatedAt: new Date().toISOString(),
             };
             nextByLoanId.set(loanId, updatedRec);
             updated += 1;
-
-            // Day-wise activity recording for non-closed / non-payment-clear accounts
-            const isClosed = status === "Closed" || status === "Payment Clear" || finalCallStatus === "Payment Done";
-            if (!isClosed) {
-              newLogs.push({
-                id: slug(),
-                loanId: loanId,
-                userId: userId,
-                customerName: customerName || existing.customerName || "Customer",
-                callStatus: finalCallStatus,
-                remark: finalRemark || "Daily Sheet Sync",
-                followUpDate: finalFollowUpDate,
-                updatedAt: new Date().toISOString(),
-                updatedBy: user?.email || "System Import",
-              });
-            }
           } else {
             const finalCallStatus = csvCallStatus || "Pending";
             const finalRemark = csvRemark || "";
@@ -1343,22 +1333,6 @@ function App() {
             };
             nextByLoanId.set(loanId, newRec);
             created += 1;
-
-            // Day-wise activity recording for non-closed / non-payment-clear accounts
-            const isClosed = status === "Closed" || status === "Payment Clear" || finalCallStatus === "Payment Done";
-            if (!isClosed) {
-              newLogs.push({
-                id: slug(),
-                loanId: loanId,
-                userId: userId,
-                customerName: customerName || "Customer",
-                callStatus: finalCallStatus,
-                remark: finalRemark || "Daily Sheet Sync",
-                followUpDate: finalFollowUpDate,
-                updatedAt: new Date().toISOString(),
-                updatedBy: user?.email || "System Import",
-              });
-            }
           }
         }
 
