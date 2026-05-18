@@ -808,6 +808,9 @@ function App() {
         if (state.telegram_settings) {
           setTelegramSettings(state.telegram_settings);
         }
+
+        // Silent background check to trigger any due Telegram alerts
+        fetch(`${API_BASE_URL}/api/reminders/cron-check`).catch(() => {});
       } catch (err) {
         console.warn("Backend state unavailable, using local persistence:", err);
         if (!active) return;

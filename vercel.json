@@ -24,7 +24,7 @@
   "crons": [
     {
       "path": "/api/reminders/cron-check",
-      "schedule": "*/30 * * * *"
+      "schedule": "0 10 * * *"
     }
   ]
 }
