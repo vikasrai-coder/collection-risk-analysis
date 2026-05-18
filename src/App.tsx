@@ -1179,6 +1179,11 @@ function App() {
     [filteredRecords],
   );
 
+  const activeRemindersCount = useMemo(
+    () => filteredRecords.filter(r => r.reminderEnabled && r.callStatus !== 'Payment Done').length,
+    [filteredRecords]
+  );
+
   const riskBands = useMemo(() => {
     const bands = [
       { label: "High", count: 0, color: "bg-rose-500" },
@@ -1896,7 +1901,14 @@ function App() {
                     }`}
                   >
                     <Icon className="h-4.5 w-4.5" />
-                    <span className="text-sm font-medium">{item.label}</span>
+                    <span className="text-sm font-medium flex-1">{item.label}</span>
+                    {item.key === "reminders" && activeRemindersCount > 0 && (
+                      <span className={`inline-flex h-5.5 min-w-5.5 items-center justify-center rounded-full px-1.5 text-xs font-bold transition-all ${
+                        isActive ? "bg-slate-900 text-cyan-400" : "bg-cyan-400 text-slate-950 animate-pulse"
+                      }`}>
+                        {activeRemindersCount}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -1949,7 +1961,14 @@ function App() {
                 }`}
               >
                 <item.icon className="h-5 w-5" />
-                <span className="font-medium">{item.label}</span>
+                <span className="font-medium flex-1">{item.label}</span>
+                {item.key === "reminders" && activeRemindersCount > 0 && (
+                  <span className={`inline-flex h-5.5 min-w-5.5 items-center justify-center rounded-full px-1.5 text-xs font-bold transition-all ${
+                    activePage === "reminders" ? "bg-slate-900 text-cyan-400" : "bg-cyan-400 text-slate-950 animate-pulse"
+                  }`}>
+                    {activeRemindersCount}
+                  </span>
+                )}
               </button>
             ))}
           </nav>
