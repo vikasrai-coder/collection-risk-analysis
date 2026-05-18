@@ -33,7 +33,7 @@ export class ErrorBoundary extends Component<Props, State> {
           </div>
           <h1 className="text-3xl font-black text-gray-900 mb-2">Something went wrong</h1>
           <p className="text-gray-500 max-w-md mb-8">
-            LeadFlow encountered an unexpected error. Don't worry, your data is safe. 
+            Collection Risk Analysis encountered an unexpected error. Don't worry, your data is safe. 
             {this.state.error && <span className="block mt-2 font-mono text-[10px] bg-gray-100 p-2 rounded opacity-70 italic">{this.state.error.message}</span>}
           </p>
           <div className="flex gap-3">
