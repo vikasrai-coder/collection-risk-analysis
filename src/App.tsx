@@ -25,6 +25,7 @@ import {
   Menu,
   Calendar,
   FileText,
+  ArrowLeft,
 } from "lucide-react";
 
 type Page = "dashboard" | "followup" | "records" | "upload" | "users";
@@ -538,6 +539,7 @@ function App() {
 
   // App core states
   const [activePage, setActivePage] = useState<Page>("dashboard");
+  const [mobileShowDashboardDetails, setMobileShowDashboardDetails] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [records, setRecords] = useState<CollectionRecord[]>([]);
   const [uploadHistory, setUploadHistory] = useState<UploadHistory[]>([]);
@@ -1878,6 +1880,11 @@ function App() {
                     key={item.key}
                     onClick={() => {
                       setActivePage(item.key);
+                      if (item.key === "dashboard") {
+                        setMobileShowDashboardDetails(true);
+                      } else {
+                        setMobileShowDashboardDetails(false);
+                      }
                       setMobileMenuOpen(false);
                     }}
                     className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left transition ${
@@ -1929,7 +1936,10 @@ function App() {
             {navItems.map((item) => (
               <button
                 key={item.key}
-                onClick={() => setActivePage(item.key)}
+                onClick={() => {
+                  setActivePage(item.key);
+                  setMobileShowDashboardDetails(false);
+                }}
                 className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left transition ${
                   activePage === item.key
                     ? "bg-cyan-400 text-slate-950 shadow-lg"
@@ -2026,40 +2036,58 @@ function App() {
             {activePage === "dashboard" && (
               <>
                 {/* Responsive Quick Navigation Hub */}
-                <div className="block lg:hidden mb-6">
-                  <div className="bg-slate-900 text-white rounded-3xl border border-white/10 p-6 shadow-2xl relative overflow-hidden">
-                    <div className="absolute top-[-20%] right-[-20%] w-[40%] h-[40%] rounded-full bg-cyan-500/10 blur-[80px]" />
-                    <h3 className="text-base font-bold tracking-tight text-white mb-1 flex items-center gap-2">
-                      <LayoutDashboard className="h-4.5 w-4.5 text-cyan-400" />
-                      Quick Navigation Hub
-                    </h3>
-                    <p className="text-[11px] text-slate-400 mb-5">Tap any section to redirect instantly</p>
-                    
-                    <div className="grid grid-cols-2 gap-3">
-                      {navItems.map((item) => {
-                        const Icon = item.icon;
-                        return (
-                          <button
-                            key={item.key}
-                            onClick={() => {
-                              setActivePage(item.key);
-                              setMobileMenuOpen(false);
-                            }}
-                            className="group flex flex-col items-start p-4 rounded-2xl border bg-white/5 border-white/10 text-slate-200 hover:bg-white/10 hover:border-white/20 active:scale-[0.98] transition cursor-pointer text-left"
-                          >
-                            <div className="p-2.5 rounded-xl mb-3 bg-white/10 text-white group-hover:bg-cyan-400 group-hover:text-slate-950 transition-all duration-300">
-                              <Icon className="h-5 w-5" />
-                            </div>
-                            <span className="text-sm font-semibold tracking-tight leading-none text-white">{item.label}</span>
-                            <span className="text-[10px] text-slate-400 mt-1 font-medium group-hover:text-slate-300">Go to section →</span>
-                          </button>
-                        );
-                      })}
+                {!mobileShowDashboardDetails ? (
+                  <div className="block lg:hidden mb-6">
+                    <div className="bg-slate-900 text-white rounded-3xl border border-white/10 p-6 shadow-2xl relative overflow-hidden">
+                      <div className="absolute top-[-20%] right-[-20%] w-[40%] h-[40%] rounded-full bg-cyan-500/10 blur-[80px]" />
+                      <h3 className="text-base font-bold tracking-tight text-white mb-1 flex items-center gap-2">
+                        <LayoutDashboard className="h-4.5 w-4.5 text-cyan-400" />
+                        Quick Navigation Hub
+                      </h3>
+                      <p className="text-[11px] text-slate-400 mb-5">Tap any section to redirect instantly</p>
+                      
+                      <div className="grid grid-cols-2 gap-3">
+                        {navItems.map((item) => {
+                          const Icon = item.icon;
+                          return (
+                            <button
+                              key={item.key}
+                              onClick={() => {
+                                if (item.key === "dashboard") {
+                                  setMobileShowDashboardDetails(true);
+                                } else {
+                                  setActivePage(item.key);
+                                }
+                                setMobileMenuOpen(false);
+                              }}
+                              className="group flex flex-col items-start p-4 rounded-2xl border bg-white/5 border-white/10 text-slate-200 hover:bg-white/10 hover:border-white/20 active:scale-[0.98] transition cursor-pointer text-left"
+                            >
+                              <div className="p-2.5 rounded-xl mb-3 bg-white/10 text-white group-hover:bg-cyan-400 group-hover:text-slate-950 transition-all duration-300">
+                                <Icon className="h-5 w-5" />
+                              </div>
+                              <span className="text-sm font-semibold tracking-tight leading-none text-white">{item.label}</span>
+                              <span className="text-[10px] text-slate-400 mt-1 font-medium group-hover:text-slate-300">Go to section →</span>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
-                </div>
+                ) : null}
 
-                <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                {/* Dashboard Details Wrapper: Hides everything except the Hub on mobile unless showDetails is true */}
+                <div className={`space-y-6 ${!mobileShowDashboardDetails ? "hidden lg:block" : "block"}`}>
+                  {mobileShowDashboardDetails && (
+                    <button
+                      onClick={() => setMobileShowDashboardDetails(false)}
+                      className="flex items-center gap-2 text-xs font-bold text-cyan-700 hover:text-cyan-800 bg-cyan-50 px-4 py-2.5 rounded-2xl border border-cyan-100 mb-2 transition active:scale-[0.98] cursor-pointer"
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                      <span>Back to Navigation Hub</span>
+                    </button>
+                  )}
+
+                  <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
                   <MetricCard icon={Database} label="Total Loan Amount" value={formatCurrency(summary.totalLoanAmount)} />
                   <MetricCard icon={ArrowUpRight} label="Default Amount" value={formatCurrency(summary.totalDefaultAmount)} />
                   <MetricCard icon={Users} label="Customers" value={String(summary.customers)} />
@@ -2277,6 +2305,7 @@ function App() {
                     </div>
                   </Panel>
                 </section>
+                </div>
               </>
             )}
 
