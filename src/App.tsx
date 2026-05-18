@@ -28,7 +28,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 
-type Page = "dashboard" | "followup" | "records" | "upload" | "users";
+type Page = "dashboard" | "followup" | "records" | "upload" | "users" | "reminders";
 
 type CollectionRecord = {
   id: string;
@@ -1130,7 +1130,7 @@ function App() {
     // so it shows chronologically inside the Interaction Activity Timeline
     if (selectedUserRecord && (selectedUserRecord.remark || selectedUserRecord.callStatus)) {
       const hasInitialLog = logs.some(log => log.id === `initial-sheet-remark-${selectedUserRecord.id}`);
-      if (!hasInitialLog && logs.length === 0) {
+      if (!hasInitialLog) {
         logs.push({
           id: `initial-sheet-remark-${selectedUserRecord.id}`,
           loanId: selectedUserRecord.loanId,
@@ -1671,6 +1671,7 @@ function App() {
   const navItems: Array<{ key: Page; label: string; icon: typeof LayoutDashboard }> = [
     { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { key: "followup", label: "Daily Follow-up", icon: PhoneCall },
+    { key: "reminders", label: "Reminders", icon: BellRing },
     { key: "records", label: "Records", icon: FileSpreadsheet },
     { key: "upload", label: "Upload", icon: Upload },
     ...(user?.role === "admin" ? [{ key: "users" as Page, label: "Users", icon: Users }] : []),
@@ -3089,11 +3090,40 @@ function App() {
                   </div>
                 </Panel>
 
-                {/* Telegram Alerts Integration */}
-                {user?.role === "admin" && (
-                  <div className="grid gap-6 lg:grid-cols-3 mt-6">
+            {activePage === "reminders" && (
+              <div className="space-y-6">
+                {/* Premium Banner */}
+                <div className="rounded-3xl bg-slate-900 p-6 text-white shadow-xl relative overflow-hidden">
+                  <div className="absolute top-[-20%] left-[-20%] w-[50%] h-[50%] rounded-full bg-cyan-500/10 blur-[120px]" />
+                  <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                      <span className="rounded-full bg-cyan-400/10 px-3 py-1 text-xs font-semibold text-cyan-400">
+                        Operational Control
+                      </span>
+                      <h2 className="mt-2 text-2xl font-bold">🔔 Reminders & Automated Alerts</h2>
+                      <p className="text-sm text-slate-400 mt-1">
+                        Monitor active queues and manage Telegram notifications dispatched during operational hours (10:00 AM - 6:00 PM IST).
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/5 border border-white/10 text-cyan-400">
+                        <BellRing className="h-5 w-5 animate-pulse" />
+                      </div>
+                      <div>
+                        <p className="text-xs text-slate-400">Background Checker</p>
+                        <p className="text-sm font-semibold text-emerald-400 flex items-center gap-1.5 mt-0.5">
+                          <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+                          Active (1m precision)
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {user?.role === "admin" ? (
+                  <div className="grid gap-6 lg:grid-cols-3">
                     <div className="lg:col-span-2">
-                      <Panel title="🔔 Telegram Reminders Configuration" subtitle="Configure automated alert updates for collection agents">
+                      <Panel title="⚙️ Telegram Reminders Configuration" subtitle="Configure automated alert updates for collection agents">
                         <form onSubmit={handleSaveTelegramSettings} className="space-y-4">
                           {telegramSaveSuccess && (
                             <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400 animate-pulse">
@@ -3168,7 +3198,7 @@ function App() {
                     </div>
 
                     <div className="lg:col-span-1">
-                      <Panel title="🧪 Telegram Alert Testing Suite" subtitle="Send an instant test notification to ensure credentials work">
+                      <Panel title="🧪 Testing & Instant Scan" subtitle="Send test alerts or manually execute the check engine">
                         <div className="space-y-4">
                           {telegramTestSuccess && (
                             <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
@@ -3202,11 +3232,11 @@ function App() {
                             {telegramTestLoading ? "Sending Notification..." : "Dispatch Test Alert Now"}
                           </button>
 
-                          <div className="border-t border-slate-100 mt-6 pt-6 space-y-3">
+                          <div className="border-t border-slate-100 mt-4 pt-4 space-y-3">
                             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
                               Active Reminder Operations
                             </label>
-                            <p className="text-xs text-slate-400 leading-relaxed">
+                            <p className="text-[11px] text-slate-400 leading-relaxed">
                               Manually scan and trigger pending customer follow-up alerts immediately, bypassing the local hour constraints.
                             </p>
                             
@@ -3234,7 +3264,79 @@ function App() {
                       </Panel>
                     </div>
                   </div>
+                ) : (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center text-slate-600">
+                    <p className="font-semibold">Reminders & Notification parameters are managed by Administrative Operators.</p>
+                    <p className="text-xs text-slate-400 mt-1">Automatic alert dispatches execute continuously between 10:00 AM - 6:00 PM IST.</p>
+                  </div>
                 )}
+
+                {/* Reminders Queue Section */}
+                <Panel title="📋 Active Reminders Queue" subtitle="List of all upcoming scheduled follow-up alerts containing active reminder flags">
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="text-left text-slate-500">
+                        <tr className="border-b border-slate-200">
+                          <th className="pb-3 font-medium">Customer Details</th>
+                          <th className="pb-3 font-medium">Lender & Anchor</th>
+                          <th className="pb-3 font-medium">Contact</th>
+                          <th className="pb-3 font-medium text-center">Date & Time</th>
+                          <th className="pb-3 font-medium">Status / Action Type</th>
+                          <th className="pb-3 font-medium">Latest Remark</th>
+                          <th className="pb-3 font-medium text-center">Alert Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredRecords.filter(r => r.reminderEnabled && r.callStatus !== 'Payment Done').map((record) => (
+                          <tr key={record.id} className="border-t border-slate-100 hover:bg-slate-50/50 transition">
+                            <td className="py-4">
+                              <div className="font-bold text-slate-900">{record.customerName}</div>
+                              <div className="text-[11px] text-slate-500 font-mono mt-0.5">{record.userId}</div>
+                            </td>
+                            <td className="py-4">
+                              <div className="font-semibold text-slate-800">{record.lender}</div>
+                              <div className="text-xs text-slate-400 mt-0.5">{record.anchorName}</div>
+                            </td>
+                            <td className="py-4 font-mono text-xs">{record.mobile || "N/A"}</td>
+                            <td className="py-4 text-center">
+                              <div className="font-semibold text-slate-900">{record.followUpDate || "Today"}</div>
+                              <div className="text-[11px] text-cyan-600 font-bold mt-0.5">{record.followUpTime || "N/A"}</div>
+                            </td>
+                            <td className="py-4">
+                              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                                record.callStatus === 'Promise To Pay' 
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                                  : 'bg-amber-50 text-amber-700 border border-amber-200'
+                              }`}>
+                                {record.callStatus || "Call Back Later"}
+                              </span>
+                            </td>
+                            <td className="py-4 max-w-xs truncate text-xs text-slate-500" title={record.remark}>
+                              {record.remark || "N/A"}
+                            </td>
+                            <td className="py-4 text-center">
+                              <span className="inline-flex items-center gap-1.5 rounded-full bg-cyan-50 border border-cyan-200 px-2.5 py-0.5 text-xs font-semibold text-cyan-700">
+                                <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 animate-pulse" />
+                                Active Reminder
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                        {filteredRecords.filter(r => r.reminderEnabled && r.callStatus !== 'Payment Done').length === 0 && (
+                          <tr>
+                            <td colSpan={7} className="py-12 text-center text-slate-400 bg-slate-50/50 rounded-2xl">
+                              <BellRing className="mx-auto h-8 w-8 text-slate-300 mb-2" />
+                              <p className="font-medium">No active reminder alerts pending in the scheduler queue.</p>
+                              <p className="text-xs text-slate-400 mt-1">Reminders are set automatically when selecting status in the Daily Follow-up page.</p>
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </Panel>
+              </div>
+            )}
               </>
             )}
 
