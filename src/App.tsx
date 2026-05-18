@@ -26,6 +26,7 @@ import {
   Calendar,
   FileText,
   ArrowLeft,
+  History,
 } from "lucide-react";
 
 type Page = "dashboard" | "followup" | "records" | "upload" | "users" | "reminders";
@@ -3290,7 +3291,12 @@ function App() {
                         {filteredRecords.filter(r => r.reminderEnabled && r.callStatus !== 'Payment Done').map((record) => (
                           <tr key={record.id} className="border-t border-slate-100 hover:bg-slate-50/50 transition">
                             <td className="py-4">
-                              <div className="font-bold text-slate-900">{record.customerName}</div>
+                              <button
+                                onClick={() => setSelectedUserId(record.userId)}
+                                className="text-left font-bold text-slate-900 hover:text-cyan-600 transition"
+                              >
+                                {record.customerName}
+                              </button>
                               <div className="text-[11px] text-slate-500 font-mono mt-0.5">{record.userId}</div>
                             </td>
                             <td className="py-4">
@@ -3316,7 +3322,7 @@ function App() {
                             </td>
                             <td className="py-4 text-center">
                               <span className="inline-flex items-center gap-1.5 rounded-full bg-cyan-50 border border-cyan-200 px-2.5 py-0.5 text-xs font-semibold text-cyan-700">
-                                <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 animate-pulse" />
+                                <span className="h-1.5 w-1.5 rounded-full bg-cyan-500" />
                                 Active Reminder
                               </span>
                             </td>
@@ -3328,6 +3334,105 @@ function App() {
                               <BellRing className="mx-auto h-8 w-8 text-slate-300 mb-2" />
                               <p className="font-medium">No active reminder alerts pending in the scheduler queue.</p>
                               <p className="text-xs text-slate-400 mt-1">Reminders are set automatically when selecting status in the Daily Follow-up page.</p>
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </Panel>
+
+                {/* Dispatched Alerts & Reminder History Section */}
+                <Panel title="📜 Dispatched & Scheduled Alerts History" subtitle="Audit log of all follow-up alerts dispatched to Telegram or scheduled by agents">
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="text-left text-slate-500">
+                        <tr className="border-b border-slate-200">
+                          <th className="pb-3 font-medium">Timestamp</th>
+                          <th className="pb-3 font-medium">Customer Details</th>
+                          <th className="pb-3 font-medium">Contact</th>
+                          <th className="pb-3 font-medium text-center">Scheduled Date & Time</th>
+                          <th className="pb-3 font-medium">Event Type</th>
+                          <th className="pb-3 font-medium">Remark / Details</th>
+                          <th className="pb-3 font-medium">Operator</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {interactionLogs
+                          .filter(log => 
+                            log.updatedBy === "System (Telegram Alert)" || 
+                            log.remark.includes("🔔") ||
+                            (log.followUpDate && log.remark.toLowerCase().includes("reminder")) ||
+                            (log.followUpDate && log.callStatus !== "Payment Done" && log.callStatus !== "Pending")
+                          )
+                          .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+                          .map((log) => {
+                            const isDispatched = log.updatedBy === "System (Telegram Alert)" || log.remark.includes("Telegram Alert");
+                            return (
+                              <tr key={log.id} className="border-t border-slate-100 hover:bg-slate-50/50 transition">
+                                <td className="py-4 text-xs text-slate-500 font-mono">
+                                  {new Date(log.updatedAt).toLocaleString('en-IN', {
+                                    year: 'numeric',
+                                    month: 'short',
+                                    day: '2-digit',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    hour12: true
+                                  })}
+                                </td>
+                                <td className="py-4">
+                                  <button
+                                    onClick={() => setSelectedUserId(log.userId)}
+                                    className="text-left font-bold text-slate-900 hover:text-cyan-600 transition"
+                                  >
+                                    {log.customerName}
+                                  </button>
+                                  <div className="text-[11px] text-slate-500 font-mono mt-0.5">{log.userId}</div>
+                                </td>
+                                <td className="py-4 font-mono text-xs">{log.mobile || "N/A"}</td>
+                                <td className="py-4 text-center">
+                                  <div className="font-semibold text-slate-900">{log.followUpDate || "N/A"}</div>
+                                  <div className="text-[11px] text-cyan-600 font-bold mt-0.5">{log.followUpTime || "N/A"}</div>
+                                </td>
+                                <td className="py-4">
+                                  <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                                    isDispatched 
+                                      ? 'bg-cyan-50 text-cyan-700 border border-cyan-200' 
+                                      : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                  }`}>
+                                    {isDispatched ? (
+                                      <>
+                                        <span className="h-1.5 w-1.5 rounded-full bg-cyan-500" />
+                                        Dispatched Alert
+                                      </>
+                                    ) : (
+                                      <>
+                                        <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
+                                        Scheduled Alert
+                                      </>
+                                    )}
+                                  </span>
+                                </td>
+                                <td className="py-4 max-w-xs truncate text-xs text-slate-500" title={log.remark}>
+                                  {log.remark || "N/A"}
+                                </td>
+                                <td className="py-4 text-xs text-slate-600 font-medium">
+                                  {log.updatedBy}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        {interactionLogs.filter(log => 
+                          log.updatedBy === "System (Telegram Alert)" || 
+                          log.remark.includes("🔔") ||
+                          (log.followUpDate && log.remark.toLowerCase().includes("reminder")) ||
+                          (log.followUpDate && log.callStatus !== "Payment Done" && log.callStatus !== "Pending")
+                        ).length === 0 && (
+                          <tr>
+                            <td colSpan={7} className="py-12 text-center text-slate-400 bg-slate-50/50 rounded-2xl">
+                              <History className="mx-auto h-8 w-8 text-slate-300 mb-2" />
+                              <p className="font-medium">No alerts history recorded yet.</p>
+                              <p className="text-xs text-slate-400 mt-1">Dispatched Telegram notification logs and scheduled update history will appear here.</p>
                             </td>
                           </tr>
                         )}
