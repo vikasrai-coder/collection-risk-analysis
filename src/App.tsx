@@ -2403,6 +2403,15 @@ function App() {
                                         >
                                           <MessageCircle className="h-3.5 w-3.5" />
                                         </a>
+                                        <a
+                                          href={`https://console.kredmint.in/merchant/dashboard/?userId=${group.userId}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="rounded-lg border border-slate-200 p-1 text-cyan-600 hover:bg-cyan-50 transition"
+                                          title="Kredmint Console"
+                                        >
+                                          <ArrowUpRight className="h-3.5 w-3.5" />
+                                        </a>
                                       </div>
                                     </div>
                                   ) : (
@@ -2632,6 +2641,15 @@ function App() {
                                     title="WhatsApp Primary"
                                   >
                                     <MessageCircle className="h-4 w-4" />
+                                  </a>
+                                  <a
+                                    href={`https://console.kredmint.in/merchant/dashboard/?userId=${group.userId}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex h-10 w-10 items-center justify-center rounded-xl bg-white border border-cyan-200 text-cyan-600 hover:bg-cyan-50 active:scale-95 transition shadow-sm"
+                                    title="Kredmint Console"
+                                  >
+                                    <ArrowUpRight className="h-4 w-4" />
                                   </a>
                                 </div>
                               </div>
@@ -3337,6 +3355,16 @@ function App() {
                                 Case File
                               </span>
                               <span className="text-xs text-slate-500 font-mono font-medium">ID: {selectedUserId}</span>
+                              <a
+                                href={`https://console.kredmint.in/merchant/dashboard/?userId=${selectedUserRecord?.userId || selectedUserId}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-bold text-cyan-600 hover:text-cyan-700 hover:bg-cyan-50 border border-slate-200 transition shadow-sm"
+                                title="Open in Kredmint Console"
+                              >
+                                <span>Console</span>
+                                <ArrowUpRight className="h-2.5 w-2.5" />
+                              </a>
                             </div>
                             <h3 className="text-xl font-bold text-slate-900 mt-1">
                               {selectedUserRecord?.customerName || "Interaction History"}
@@ -3492,6 +3520,32 @@ function App() {
                                   {selectedUserRecord.reminderEnabled ? "Enabled" : "Disabled"}
                                 </span>
                               </div>
+                            </div>
+                          )}
+
+                          {/* Kredmint Console Redirection Card */}
+                          {selectedUserRecord && (
+                            <div className="rounded-3xl border border-cyan-200 bg-gradient-to-tr from-cyan-50/50 to-blue-50/20 p-5 shadow-sm space-y-4">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-bold text-cyan-800 uppercase tracking-wider">Console Integration</span>
+                                <span className="inline-flex items-center rounded-full bg-cyan-100 px-2.5 py-0.5 text-[10px] font-bold text-cyan-800 border border-cyan-200">
+                                  Live Dashboard
+                                </span>
+                              </div>
+                              
+                              <p className="text-xs text-slate-500 leading-relaxed font-medium">
+                                Access the live Kredmint console for this merchant to manage their risk limits, active loans, and credit profile.
+                              </p>
+
+                              <a
+                                href={`https://console.kredmint.in/merchant/dashboard/?userId=${selectedUserRecord.userId}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center justify-center gap-2 w-full rounded-2xl bg-cyan-600 hover:bg-cyan-700 hover:shadow-cyan-600/20 hover:shadow-lg py-3 text-sm font-bold text-white shadow-md active:scale-[0.98] transition-all duration-200"
+                              >
+                                <span>Go to Kredmint Console</span>
+                                <ArrowUpRight className="h-4 w-4" />
+                              </a>
                             </div>
                           )}
 
