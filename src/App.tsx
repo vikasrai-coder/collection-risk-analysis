@@ -3142,6 +3142,8 @@ function App() {
                     </table>
                   </div>
                 </Panel>
+              </>
+            )}
 
             {activePage === "reminders" && (
               <div className="space-y-6">
@@ -3512,8 +3514,6 @@ function App() {
                   </div>
                 </Panel>
               </div>
-            )}
-              </>
             )}
 
             {activePage === "users" && user?.role === "admin" && (
