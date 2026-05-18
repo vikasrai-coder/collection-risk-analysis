@@ -518,12 +518,32 @@ async function checkAndSendTelegramReminders(force = false) {
     }
     stats.isEnabled = true;
 
-    // Check time constraint: 10 AM to 6 PM (10:00 - 18:00) unless forced
-    const localTime = new Date();
-    const hour = localTime.getHours();
-    const minute = localTime.getMinutes();
+    // Get current Indian Standard Time (IST) components safely across all server environments
+    const options = {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    };
+    const formatter = new Intl.DateTimeFormat("en-US", options);
+    const parts = formatter.formatToParts(new Date());
+    
+    const partMap = {};
+    for (const part of parts) {
+      partMap[part.type] = part.value;
+    }
+    
+    const todayStr = `${partMap.year}-${partMap.month}-${partMap.day}`; // "2026-05-18"
+    const currentTimeStr = `${partMap.hour}:${partMap.minute}`; // "13:10"
+    const hour = Number(partMap.hour);
+
+    // Check time constraint: 10 AM to 6 PM (10:00 - 18:00) IST unless forced
     if (!force && (hour < 10 || hour >= 18)) {
-      console.log(`[Telegram Scheduler] Hour ${hour} outside active operational window (10:00 - 18:00). Skipping scheduler alerts.`);
+      console.log(`[Telegram Scheduler] Hour ${hour} IST outside active operational window (10:00 - 18:00). Skipping scheduler alerts.`);
       stats.skippedDueToTime = true;
       return stats;
     }
@@ -533,12 +553,6 @@ async function checkAndSendTelegramReminders(force = false) {
       "SELECT payload FROM app_state WHERE state_key = 'records'"
     );
     const records = recordsResult.rows[0]?.payload || [];
-
-    // Calculate local date and current time string (e.g. "13:00")
-    const todayStr = localTime.getFullYear() + '-' + 
-                     String(localTime.getMonth() + 1).padStart(2, '0') + '-' + 
-                     String(localTime.getDate()).padStart(2, '0');
-    const currentTimeStr = String(hour).padStart(2, '0') + ':' + String(minute).padStart(2, '0');
 
     const pendingReminders = records.filter(r => {
       const needsApproach = r.callStatus === 'Call Back Later' || r.callStatus === 'Promise To Pay';
@@ -568,12 +582,14 @@ async function checkAndSendTelegramReminders(force = false) {
           followUpTime: r.followUpTime || 'N/A',
           remarks: [],
           totalDefaultAmount: 0,
-          recordsCount: 0
+          recordsCount: 0,
+          originalRecords: []
         };
       }
       const group = groupedReminders[r.userId];
       group.totalDefaultAmount += Number(r.defaultAmount || 0);
       group.recordsCount += 1;
+      group.originalRecords.push(r);
       
       // Keep the earliest followUpTime
       if (r.followUpTime && r.followUpTime !== 'N/A') {
@@ -595,6 +611,8 @@ async function checkAndSendTelegramReminders(force = false) {
     }
 
     console.log(`[Telegram Scheduler] Found ${pendingReminders.length} pending followups across ${uniqueUserIds.length} unique customers. Dispatching grouped alerts...`);
+
+    let databaseUpdateNeeded = false;
 
     for (const userId of uniqueUserIds) {
       const group = groupedReminders[userId];
@@ -637,11 +655,30 @@ async function checkAndSendTelegramReminders(force = false) {
         await sendTelegramMessage(settings.botToken, settings.chatId, msg, replyMarkup);
         console.log(`[Telegram Scheduler] Grouped alert sent for user: ${group.userId}`);
         stats.dispatchedCount++;
+
+        // Mark the records under this grouped user as processed so they don't fire again
+        for (const origRec of group.originalRecords) {
+          const match = records.find(rec => rec.id === origRec.id);
+          if (match) {
+            match.reminderEnabled = false;
+            databaseUpdateNeeded = true;
+          }
+        }
       } catch (err) {
         console.error(`[Telegram Scheduler] Error sending for ${group.userId}:`, err.message);
         stats.errors.push({ userId: group.userId, error: err.message });
       }
     }
+
+    // Save back the updated records state if any reminder was successfully sent and marked false
+    if (databaseUpdateNeeded) {
+      await query(
+        "INSERT INTO app_state (state_key, payload) VALUES ($1, $2) ON CONFLICT (state_key) DO UPDATE SET payload = EXCLUDED.payload",
+        ['records', JSON.stringify(records)]
+      );
+      console.log(`[Telegram Scheduler] Successfully updated database to clear dispatched reminders.`);
+    }
+
   } catch (error) {
     console.error('[Telegram Scheduler] Error in reminder cycle:', error.message);
     stats.errors.push({ global: error.message });
