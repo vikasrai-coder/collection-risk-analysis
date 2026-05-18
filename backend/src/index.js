@@ -418,6 +418,20 @@ app.post('/api/state', async (req, res) => {
   const { records = [], history = [], interaction_logs = [], telegram_settings } = req.body || {};
 
   try {
+    // 1. Fetch sent_reminders to prevent old records payload from resurrecting sent reminders
+    const sentResult = await query(
+      "SELECT payload FROM app_state WHERE state_key = 'sent_reminders'"
+    );
+    const sentReminders = sentResult.rows[0]?.payload || [];
+
+    const finalRecords = records.map(rec => {
+      const key = `${rec.id}-${rec.followUpDate || 'no-date'}-${rec.followUpTime || 'no-time'}`;
+      if (sentReminders.includes(key)) {
+        return { ...rec, reminderEnabled: false };
+      }
+      return rec;
+    });
+
     await query(
       `
       INSERT INTO app_state (state_key, payload, updated_at)
@@ -425,7 +439,7 @@ app.post('/api/state', async (req, res) => {
       ON CONFLICT (state_key)
       DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
       `,
-      ['records', JSON.stringify(records)],
+      ['records', JSON.stringify(finalRecords)],
     );
 
     await query(
@@ -438,6 +452,25 @@ app.post('/api/state', async (req, res) => {
       ['history', JSON.stringify(history)],
     );
 
+    // 2. Fetch existing database interaction logs to merge system-dispatched ones
+    const existingLogsResult = await query(
+      "SELECT payload FROM app_state WHERE state_key = 'interaction_logs'"
+    );
+    const existingLogs = existingLogsResult.rows[0]?.payload || [];
+
+    const mergedLogs = [...interaction_logs];
+    for (const extLog of existingLogs) {
+      if (!extLog) continue;
+      const updatedBy = extLog.updatedBy || "";
+      const remark = extLog.remark || "";
+      if (updatedBy === "System (Telegram Alert)" || remark.includes("🔔") || remark.includes("Telegram Alert")) {
+        const alreadyExists = mergedLogs.some(log => log && log.id === extLog.id);
+        if (!alreadyExists) {
+          mergedLogs.push(extLog);
+        }
+      }
+    }
+
     await query(
       `
       INSERT INTO app_state (state_key, payload, updated_at)
@@ -445,7 +478,7 @@ app.post('/api/state', async (req, res) => {
       ON CONFLICT (state_key)
       DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
       `,
-      ['interaction_logs', JSON.stringify(interaction_logs)],
+      ['interaction_logs', JSON.stringify(mergedLogs)],
     );
 
     if (telegram_settings) {

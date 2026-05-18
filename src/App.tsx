@@ -655,6 +655,37 @@ function App() {
     }
   };
 
+  const refreshStateFromServer = async () => {
+    try {
+      const state = await fetchBackendState();
+      if (Array.isArray(state.records)) {
+        setRecords(restrictToAllowedLenders(state.records));
+      }
+      if (Array.isArray(state.history)) {
+        setUploadHistory(state.history);
+      }
+      if (Array.isArray(state.interaction_logs)) {
+        setInteractionLogs(state.interaction_logs);
+      }
+      if (state.telegram_settings) {
+        setTelegramSettings(state.telegram_settings);
+      }
+    } catch (err) {
+      console.error("Failed to refresh state from server:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (!token) return;
+    
+    // Poll the backend state every 30 seconds for live scheduler/telegram dispatches
+    const interval = setInterval(() => {
+      refreshStateFromServer();
+    }, 30000);
+    
+    return () => clearInterval(interval);
+  }, [token]);
+
   const handleRunCron = async () => {
     setCronRunSuccess("");
     setCronRunError("");
@@ -679,6 +710,8 @@ function App() {
         setCronRunSuccess(
           `🔔 Check complete! Evaluated ${stats.checkedCount} pending reminder(s). Dispatched ${stats.dispatchedCount} Telegram alert(s).`
         );
+        // Refresh local memory from server immediately
+        await refreshStateFromServer();
       }
     } catch (err: any) {
       setCronRunError(err.message || "Something went wrong running reminder check.");
@@ -3377,16 +3410,27 @@ function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {interactionLogs
-                          .filter(log => 
-                            log.updatedBy === "System (Telegram Alert)" || 
-                            log.remark.includes("🔔") ||
-                            (log.followUpDate && log.remark.toLowerCase().includes("reminder")) ||
-                            (log.followUpDate && log.callStatus !== "Payment Done" && log.callStatus !== "Pending")
-                          )
+                        {interactionLogs && Array.isArray(interactionLogs) && interactionLogs
+                          .filter(log => {
+                            if (!log) return false;
+                            const remark = log.remark || "";
+                            const followUpDate = log.followUpDate || "";
+                            const callStatus = log.callStatus || "";
+                            const updatedBy = log.updatedBy || "";
+                            
+                            return (
+                              updatedBy === "System (Telegram Alert)" || 
+                              remark.includes("🔔") ||
+                              remark.includes("Telegram Alert") ||
+                              (followUpDate && remark.toLowerCase().includes("reminder")) ||
+                              (followUpDate && callStatus !== "Payment Done" && callStatus !== "Pending")
+                            );
+                          })
                           .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
                           .map((log) => {
-                            const isDispatched = log.updatedBy === "System (Telegram Alert)" || log.remark.includes("Telegram Alert");
+                            const remark = log.remark || "";
+                            const updatedBy = log.updatedBy || "";
+                            const isDispatched = updatedBy === "System (Telegram Alert)" || remark.includes("Telegram Alert") || remark.includes("🔔");
                             return (
                               <tr key={log.id} className="border-t border-slate-100 hover:bg-slate-50/50 transition">
                                 <td className="py-4 text-xs text-slate-500 font-mono">
@@ -3432,21 +3476,29 @@ function App() {
                                     )}
                                   </span>
                                 </td>
-                                <td className="py-4 max-w-xs truncate text-xs text-slate-500" title={log.remark}>
-                                  {log.remark || "N/A"}
+                                <td className="py-4 max-w-xs truncate text-xs text-slate-500" title={remark}>
+                                  {remark || "N/A"}
                                 </td>
                                 <td className="py-4 text-xs text-slate-600 font-medium">
-                                  {log.updatedBy}
+                                  {updatedBy}
                                 </td>
                               </tr>
                             );
                           })}
-                        {interactionLogs.filter(log => 
-                          log.updatedBy === "System (Telegram Alert)" || 
-                          log.remark.includes("🔔") ||
-                          (log.followUpDate && log.remark.toLowerCase().includes("reminder")) ||
-                          (log.followUpDate && log.callStatus !== "Payment Done" && log.callStatus !== "Pending")
-                        ).length === 0 && (
+                        {(!interactionLogs || !Array.isArray(interactionLogs) || interactionLogs.filter(log => {
+                          if (!log) return false;
+                          const remark = log.remark || "";
+                          const followUpDate = log.followUpDate || "";
+                          const callStatus = log.callStatus || "";
+                          const updatedBy = log.updatedBy || "";
+                          return (
+                            updatedBy === "System (Telegram Alert)" || 
+                            remark.includes("🔔") ||
+                            remark.includes("Telegram Alert") ||
+                            (followUpDate && remark.toLowerCase().includes("reminder")) ||
+                            (followUpDate && callStatus !== "Payment Done" && callStatus !== "Pending")
+                          );
+                        }).length === 0) && (
                           <tr>
                             <td colSpan={7} className="py-12 text-center text-slate-400 bg-slate-50/50 rounded-2xl">
                               <History className="mx-auto h-8 w-8 text-slate-300 mb-2" />
