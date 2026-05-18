@@ -21,13 +21,17 @@ app.use(express.json({ limit: '25mb' }));
 app.use(morgan('dev'));
 
 // Helper to send Telegram message using native https
-function sendTelegramMessage(botToken, chatId, text) {
+function sendTelegramMessage(botToken, chatId, text, replyMarkup = null) {
   return new Promise((resolve, reject) => {
-    const data = JSON.stringify({
+    const payload = {
       chat_id: chatId,
       text: text,
       parse_mode: 'Markdown'
-    });
+    };
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
+    const data = JSON.stringify(payload);
 
     const options = {
       hostname: 'api.telegram.org',
@@ -36,7 +40,7 @@ function sendTelegramMessage(botToken, chatId, text) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': data.length
+        'Content-Length': Buffer.byteLength(data)
       }
     };
 
@@ -517,6 +521,7 @@ async function checkAndSendTelegramReminders(force = false) {
     // Check time constraint: 10 AM to 6 PM (10:00 - 18:00) unless forced
     const localTime = new Date();
     const hour = localTime.getHours();
+    const minute = localTime.getMinutes();
     if (!force && (hour < 10 || hour >= 18)) {
       console.log(`[Telegram Scheduler] Hour ${hour} outside active operational window (10:00 - 18:00). Skipping scheduler alerts.`);
       stats.skippedDueToTime = true;
@@ -529,38 +534,112 @@ async function checkAndSendTelegramReminders(force = false) {
     );
     const records = recordsResult.rows[0]?.payload || [];
 
-    const todayStr = new Date().toISOString().slice(0, 10);
+    // Calculate local date and current time string (e.g. "13:00")
+    const todayStr = localTime.getFullYear() + '-' + 
+                     String(localTime.getMonth() + 1).padStart(2, '0') + '-' + 
+                     String(localTime.getDate()).padStart(2, '0');
+    const currentTimeStr = String(hour).padStart(2, '0') + ':' + String(minute).padStart(2, '0');
 
     const pendingReminders = records.filter(r => {
       const needsApproach = r.callStatus === 'Call Back Later' || r.callStatus === 'Promise To Pay';
-      const isTodayOrPast = r.followUpDate && r.followUpDate <= todayStr;
-      return r.reminderEnabled && (needsApproach || isTodayOrPast) && r.callStatus !== 'Payment Done';
+      
+      const isPastDate = r.followUpDate && r.followUpDate < todayStr;
+      const isTodayDate = r.followUpDate && r.followUpDate === todayStr;
+      
+      let isTimeEligible = true;
+      if (isTodayDate && r.followUpTime) {
+        isTimeEligible = currentTimeStr >= r.followUpTime;
+      }
+      
+      const isDateOrTimeEligible = isPastDate || (isTodayDate && isTimeEligible);
+      
+      return r.reminderEnabled && (needsApproach || isDateOrTimeEligible) && r.callStatus !== 'Payment Done';
     });
 
-    stats.checkedCount = pendingReminders.length;
-    if (pendingReminders.length === 0) {
+    // Group pending reminders by userId to prevent invoice-wise duplicate notifications
+    const groupedReminders = {};
+    for (const r of pendingReminders) {
+      if (!groupedReminders[r.userId]) {
+        groupedReminders[r.userId] = {
+          userId: r.userId,
+          customerName: r.customerName || 'N/A',
+          mobile: r.mobile || '',
+          followUpDate: r.followUpDate || 'Today',
+          followUpTime: r.followUpTime || 'N/A',
+          remarks: [],
+          totalDefaultAmount: 0,
+          recordsCount: 0
+        };
+      }
+      const group = groupedReminders[r.userId];
+      group.totalDefaultAmount += Number(r.defaultAmount || 0);
+      group.recordsCount += 1;
+      
+      // Keep the earliest followUpTime
+      if (r.followUpTime && r.followUpTime !== 'N/A') {
+        if (group.followUpTime === 'N/A' || r.followUpTime < group.followUpTime) {
+          group.followUpTime = r.followUpTime;
+        }
+      }
+      
+      // Collect unique remarks
+      if (r.remark && r.remark.trim() && !group.remarks.includes(r.remark.trim())) {
+        group.remarks.push(r.remark.trim());
+      }
+    }
+
+    const uniqueUserIds = Object.keys(groupedReminders);
+    stats.checkedCount = uniqueUserIds.length;
+    if (uniqueUserIds.length === 0) {
       return stats;
     }
 
-    console.log(`[Telegram Scheduler] Found ${pendingReminders.length} pending followups. Dispatching alerts...`);
+    console.log(`[Telegram Scheduler] Found ${pendingReminders.length} pending followups across ${uniqueUserIds.length} unique customers. Dispatching grouped alerts...`);
 
-    for (const record of pendingReminders) {
+    for (const userId of uniqueUserIds) {
+      const group = groupedReminders[userId];
+      const invoiceCountLabel = group.recordsCount > 1 ? ` (${group.recordsCount} Invoices)` : '';
+      const combinedRemark = group.remarks.length > 0 ? group.remarks.join(' | ') : 'N/A';
+
       const msg = `🔔 *Collection Follow-up Alert*\n\n` +
-                  `👤 *Customer*: ${record.customerName || 'N/A'}\n` +
-                  `🆔 *User ID*: ${record.userId}\n` +
-                  `💰 *Default Amount*: ₹${record.defaultAmount || 0}\n` +
-                  `📞 *Contact*: ${record.mobile || 'N/A'}\n` +
-                  `📅 *Follow-up Date*: ${record.followUpDate || 'Today'}\n` +
-                  `📝 *Current Remark*: ${record.remark || 'N/A'}\n\n` +
+                  `👤 *Customer*: ${group.customerName}\n` +
+                  `🆔 *User ID*: ${group.userId}\n` +
+                  `💰 *Total Default*: ₹${group.totalDefaultAmount.toLocaleString('en-IN')}${invoiceCountLabel}\n` +
+                  `📞 *Contact*: ${group.mobile || 'N/A'}\n` +
+                  `📅 *Follow-up Date*: ${group.followUpDate}\n` +
+                  `⏰ *Follow-up Time*: ${group.followUpTime}\n` +
+                  `📝 *Remarks*: ${combinedRemark}\n\n` +
                   `⚠️ _Please contact this customer between active operational hours (10 AM to 6 PM)._`;
       
+      // Build call & whatsapp inline keyboard buttons
+      let replyMarkup = null;
+      if (group.mobile) {
+        const cleanPhone = group.mobile.replace(/\D/g, '');
+        const formattedPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
+        
+        replyMarkup = {
+          inline_keyboard: [
+            [
+              {
+                text: "📞 Call Customer",
+                url: cleanPhone.length === 10 ? `tel:+91${cleanPhone}` : `tel:${cleanPhone}`
+              },
+              {
+                text: "💬 Chat on WhatsApp",
+                url: `https://wa.me/${formattedPhone}`
+              }
+            ]
+          ]
+        };
+      }
+
       try {
-        await sendTelegramMessage(settings.botToken, settings.chatId, msg);
-        console.log(`[Telegram Scheduler] Alert sent for user: ${record.userId}`);
+        await sendTelegramMessage(settings.botToken, settings.chatId, msg, replyMarkup);
+        console.log(`[Telegram Scheduler] Grouped alert sent for user: ${group.userId}`);
         stats.dispatchedCount++;
       } catch (err) {
-        console.error(`[Telegram Scheduler] Error sending for ${record.userId}:`, err.message);
-        stats.errors.push({ userId: record.userId, error: err.message });
+        console.error(`[Telegram Scheduler] Error sending for ${group.userId}:`, err.message);
+        stats.errors.push({ userId: group.userId, error: err.message });
       }
     }
   } catch (error) {
@@ -592,8 +671,8 @@ app.get('/api/reminders/cron-check', async (req, res) => {
   }
 });
 
-// Check every 30 minutes in background (in local environments)
-setInterval(() => checkAndSendTelegramReminders(false), 30 * 60 * 1000);
+// Check every 1 minute in background (in local environments) for high-precision alerts
+setInterval(() => checkAndSendTelegramReminders(false), 1 * 60 * 1000);
 
 if (process.env.NODE_ENV !== 'production' || process.env.VERCEL) {
   ensureSchema()

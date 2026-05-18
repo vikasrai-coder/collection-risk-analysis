@@ -42,14 +42,29 @@ export async function query(text, params) {
   if (text.includes('SELECT') && text.includes('app_state')) {
     if (supabase) {
       try {
-        const { data, error } = await supabase
-          .from('app_state')
-          .select('state_key, payload, updated_at')
-          .in('state_key', params);
-        
-        if (!error) {
-          activeTarget = 'supabase';
-          return { rows: data };
+        let keys = params;
+        if (!keys || !Array.isArray(keys) || keys.length === 0) {
+          // Attempt to extract single key from query string, e.g. state_key = 'telegram_settings'
+          const match = text.match(/state_key\s*=\s*'([^']+)'/i);
+          if (match && match[1]) {
+            keys = [match[1]];
+          }
+        }
+
+        if (keys && Array.isArray(keys) && keys.length > 0) {
+          const { data, error } = await supabase
+            .from('app_state')
+            .select('state_key, payload, updated_at')
+            .in('state_key', keys);
+          
+          if (!error && data) {
+            activeTarget = 'supabase';
+            // Map payloads to return expected structure
+            if (text.trim().toLowerCase().startsWith('select payload')) {
+              return { rows: data.map(item => ({ payload: item.payload })) };
+            }
+            return { rows: data };
+          }
         }
       } catch (e) {
         console.error('Supabase fetch failed, falling back to local PG:', e);
