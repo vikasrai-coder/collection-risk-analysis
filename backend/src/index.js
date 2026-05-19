@@ -20,6 +20,98 @@ app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 app.use(morgan('dev'));
 
+// Helper to clean up passed reminders and reset yesterday's follow-ups in IST
+function cleanupAndResetStaleRecords(records) {
+  if (!Array.isArray(records)) return [];
+
+  // Get current Indian Standard Time (IST) components
+  const options = {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  };
+  const formatter = new Intl.DateTimeFormat("en-US", options);
+  const parts = formatter.formatToParts(new Date());
+  
+  const partMap = {};
+  for (const part of parts) {
+    partMap[part.type] = part.value;
+  }
+  
+  const todayStr = `${partMap.year}-${partMap.month}-${partMap.day}`; // "YYYY-MM-DD"
+  const currentTimeStr = `${partMap.hour}:${partMap.minute}`; // "HH:MM"
+
+  return records.map(rec => {
+    let recordUpdateDateIst = "";
+    if (rec.updatedAt) {
+      try {
+        const uDate = new Date(rec.updatedAt);
+        const uParts = formatter.formatToParts(uDate);
+        const uMap = {};
+        for (const p of uParts) {
+          uMap[p.type] = p.value;
+        }
+        recordUpdateDateIst = `${uMap.year}-${uMap.month}-${uMap.day}`;
+      } catch (e) {
+        recordUpdateDateIst = rec.updatedAt.slice(0, 10);
+      }
+    }
+
+    // 1. Check if reminder has passed
+    let reminderPassed = false;
+    if (rec.followUpDate) {
+      if (rec.followUpDate < todayStr) {
+        reminderPassed = true;
+      } else if (rec.followUpDate === todayStr) {
+        if (rec.followUpTime && currentTimeStr >= rec.followUpTime) {
+          reminderPassed = true;
+        }
+      }
+    }
+
+    // 2. Determine if it is a new day relative to the record's last update
+    const isNewDay = recordUpdateDateIst && recordUpdateDateIst < todayStr;
+
+    // Check if the record is resolved (Payment Done, Closed, Payment Clear)
+    const isResolved = rec.callStatus === "Payment Done" || rec.status === "Closed" || rec.status === "Payment Clear";
+
+    // Copy record to update it
+    let updatedRec = { ...rec };
+
+    if (reminderPassed) {
+      // If reminder has passed, disable it so it won't show/alert anymore
+      updatedRec.reminderEnabled = false;
+      
+      // If it's a new day or if the reminder has passed and NOT resolved, reset call status for fresh calling
+      if (isNewDay || !isResolved) {
+        updatedRec.callStatus = "Pending";
+        updatedRec.remark = "";
+        updatedRec.followUpDate = "";
+        updatedRec.followUpTime = "";
+      }
+    } else if (isNewDay && !isResolved) {
+      // If it's a new day and NOT resolved, reset call status for fresh calling
+      // But if there is a FUTURE scheduled reminder, we keep it intact!
+      const hasFutureReminder = rec.reminderEnabled && rec.followUpDate && 
+        (rec.followUpDate > todayStr || (rec.followUpDate === todayStr && rec.followUpTime && rec.followUpTime > currentTimeStr));
+        
+      if (!hasFutureReminder) {
+        updatedRec.callStatus = "Pending";
+        updatedRec.remark = "";
+        updatedRec.followUpDate = "";
+        updatedRec.followUpTime = "";
+        updatedRec.reminderEnabled = false;
+      }
+    }
+
+    return updatedRec;
+  });
+}
+
 // Helper to send Telegram message using native https with strict error parsing
 function sendTelegramMessage(botToken, chatId, text, replyMarkup = null) {
   return new Promise((resolve, reject) => {
@@ -398,14 +490,36 @@ app.get('/api/state', async (_req, res) => {
       updatedAt: null,
     };
 
+    let recordsUpdated = false;
+    let recordsList = [];
+
     for (const row of result.rows) {
-      if (row.state_key === 'records') payload.records = row.payload || [];
+      if (row.state_key === 'records') {
+        const rawRecords = row.payload || [];
+        recordsList = cleanupAndResetStaleRecords(rawRecords);
+        if (JSON.stringify(rawRecords) !== JSON.stringify(recordsList)) {
+          recordsUpdated = true;
+        }
+        payload.records = recordsList;
+      }
       if (row.state_key === 'history') payload.history = row.payload || [];
       if (row.state_key === 'interaction_logs') payload.interaction_logs = row.payload || [];
       if (row.state_key === 'telegram_settings') payload.telegram_settings = row.payload || payload.telegram_settings;
       if (!payload.updatedAt || row.updated_at > payload.updatedAt) {
         payload.updatedAt = row.updated_at;
       }
+    }
+
+    if (recordsUpdated) {
+      await query(
+        `
+        INSERT INTO app_state (state_key, payload, updated_at)
+        VALUES ($1, $2::jsonb, NOW())
+        ON CONFLICT (state_key)
+        DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
+        `,
+        ['records', JSON.stringify(recordsList)],
+      );
     }
 
     res.json(payload);
@@ -424,7 +538,7 @@ app.post('/api/state', async (req, res) => {
     );
     const sentReminders = sentResult.rows[0]?.payload || [];
 
-    const finalRecords = records.map(rec => {
+    const finalRecords = cleanupAndResetStaleRecords(records).map(rec => {
       const key = `${rec.id}-${rec.followUpDate || 'no-date'}-${rec.followUpTime || 'no-time'}`;
       if (sentReminders.includes(key)) {
         return { ...rec, reminderEnabled: false };
@@ -598,7 +712,9 @@ async function checkAndSendTelegramReminders(force = false) {
     const recordsResult = await query(
       "SELECT payload FROM app_state WHERE state_key = 'records'"
     );
-    const records = recordsResult.rows[0]?.payload || [];
+    const rawRecords = recordsResult.rows[0]?.payload || [];
+    const records = cleanupAndResetStaleRecords(rawRecords);
+    let databaseUpdateNeeded = JSON.stringify(rawRecords) !== JSON.stringify(records);
 
     // Get interaction logs for Activity timeline sync
     const logsResult = await query(
@@ -667,12 +783,17 @@ async function checkAndSendTelegramReminders(force = false) {
     const uniqueUserIds = Object.keys(groupedReminders);
     stats.checkedCount = uniqueUserIds.length;
     if (uniqueUserIds.length === 0) {
+      // If there was a database update needed from cleanup, save it even if no dispatches
+      if (databaseUpdateNeeded) {
+        await query(
+          "INSERT INTO app_state (state_key, payload) VALUES ($1, $2) ON CONFLICT (state_key) DO UPDATE SET payload = EXCLUDED.payload",
+          ['records', JSON.stringify(records)]
+        );
+      }
       return stats;
     }
 
     console.log(`[Telegram Scheduler] Found ${pendingReminders.length} pending followups across ${uniqueUserIds.length} unique customers. Dispatching grouped alerts...`);
-
-    let databaseUpdateNeeded = false;
 
     for (const userId of uniqueUserIds) {
       const group = groupedReminders[userId];

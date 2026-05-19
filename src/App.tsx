@@ -362,6 +362,97 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function cleanupAndResetStaleRecords(records: CollectionRecord[]): CollectionRecord[] {
+  if (!Array.isArray(records)) return [];
+
+  // Get current Indian Standard Time (IST) components
+  const options = {
+    timeZone: "Asia/Kolkata",
+    year: "numeric" as const,
+    month: "2-digit" as const,
+    day: "2-digit" as const,
+    hour: "2-digit" as const,
+    minute: "2-digit" as const,
+    hour12: false
+  };
+  const formatter = new Intl.DateTimeFormat("en-US", options);
+  const parts = formatter.formatToParts(new Date());
+  
+  const partMap: any = {};
+  for (const part of parts) {
+    partMap[part.type] = part.value;
+  }
+  
+  const todayStr = `${partMap.year}-${partMap.month}-${partMap.day}`; // "YYYY-MM-DD"
+  const currentTimeStr = `${partMap.hour}:${partMap.minute}`; // "HH:MM"
+
+  return records.map(rec => {
+    let recordUpdateDateIst = "";
+    if (rec.updatedAt) {
+      try {
+        const uDate = new Date(rec.updatedAt);
+        const uParts = formatter.formatToParts(uDate);
+        const uMap: any = {};
+        for (const p of uParts) {
+          uMap[p.type] = p.value;
+        }
+        recordUpdateDateIst = `${uMap.year}-${uMap.month}-${uMap.day}`;
+      } catch (e) {
+        recordUpdateDateIst = rec.updatedAt.slice(0, 10);
+      }
+    }
+
+    // 1. Check if reminder has passed
+    let reminderPassed = false;
+    if (rec.followUpDate) {
+      if (rec.followUpDate < todayStr) {
+        reminderPassed = true;
+      } else if (rec.followUpDate === todayStr) {
+        if (rec.followUpTime && currentTimeStr >= rec.followUpTime) {
+          reminderPassed = true;
+        }
+      }
+    }
+
+    // 2. Determine if it is a new day relative to the record's last update
+    const isNewDay = recordUpdateDateIst && recordUpdateDateIst < todayStr;
+
+    // Check if the record is resolved (Payment Done, Closed, Payment Clear)
+    const isResolved = rec.callStatus === "Payment Done" || rec.status === "Closed" || rec.status === "Payment Clear";
+
+    // Copy record to update it
+    let updatedRec = { ...rec };
+
+    if (reminderPassed) {
+      // If reminder has passed, disable it so it won't show/alert anymore
+      updatedRec.reminderEnabled = false;
+      
+      // If it's a new day or if the reminder has passed and NOT resolved, reset call status for fresh calling
+      if (isNewDay || !isResolved) {
+        updatedRec.callStatus = "Pending";
+        updatedRec.remark = "";
+        updatedRec.followUpDate = "";
+        updatedRec.followUpTime = "";
+      }
+    } else if (isNewDay && !isResolved) {
+      // If it's a new day and NOT resolved, reset call status for fresh calling
+      // But if there is a FUTURE scheduled reminder, we keep it intact!
+      const hasFutureReminder = rec.reminderEnabled && rec.followUpDate && 
+        (rec.followUpDate > todayStr || (rec.followUpDate === todayStr && rec.followUpTime && rec.followUpTime > currentTimeStr));
+        
+      if (!hasFutureReminder) {
+        updatedRec.callStatus = "Pending";
+        updatedRec.remark = "";
+        updatedRec.followUpDate = "";
+        updatedRec.followUpTime = "";
+        updatedRec.reminderEnabled = false;
+      }
+    }
+
+    return updatedRec;
+  });
+}
+
 function openCollectionRiskDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -613,7 +704,7 @@ function App() {
       // Fetch fresh backend state after logging in
       const state = await fetchBackendState();
       if (Array.isArray(state.records) && state.records.length) {
-        setRecords(restrictToAllowedLenders(state.records));
+        setRecords(cleanupAndResetStaleRecords(restrictToAllowedLenders(state.records)));
       }
       if (Array.isArray(state.history) && state.history.length) {
         setUploadHistory(state.history);
@@ -659,7 +750,7 @@ function App() {
     try {
       const state = await fetchBackendState();
       if (Array.isArray(state.records)) {
-        setRecords(restrictToAllowedLenders(state.records));
+        setRecords(cleanupAndResetStaleRecords(restrictToAllowedLenders(state.records)));
       }
       if (Array.isArray(state.history)) {
         setUploadHistory(state.history);
@@ -877,10 +968,10 @@ function App() {
         if (!active) return;
 
         if (Array.isArray(state.records) && state.records.length) {
-          setRecords(restrictToAllowedLenders(state.records));
+          setRecords(cleanupAndResetStaleRecords(restrictToAllowedLenders(state.records)));
         } else {
           const localRecs = await readPersistedRecords().catch(() => loadRecords());
-          if (active) setRecords(localRecs);
+          if (active) setRecords(cleanupAndResetStaleRecords(localRecs));
         }
 
         if (Array.isArray(state.history) && state.history.length) {
@@ -905,7 +996,7 @@ function App() {
 
         const localRecs = await readPersistedRecords().catch(() => loadRecords());
         if (active) {
-          setRecords(localRecs);
+          setRecords(cleanupAndResetStaleRecords(localRecs));
           setUploadHistory(loadHistory());
         }
       } finally {
@@ -1199,23 +1290,70 @@ function App() {
     return Array.from(source.entries()).sort((a, b) => b[1] - a[1]);
   }, [filteredRecords]);
 
-  const reminderQueue = useMemo(
-    () =>
-      filteredRecords
-        .filter((record) => 
-          (record.followUpDate || record.reminderEnabled) &&
-          record.callStatus !== "Payment Done" &&
-          record.status !== "Closed" &&
-          record.status !== "Payment Clear"
-        )
-        .sort((a, b) => (a.followUpDate || "9999").localeCompare(b.followUpDate || "9999")),
-    [filteredRecords],
-  );
+  const reminderQueue = useMemo(() => {
+    // Get current Indian Standard Time (IST) components
+    const options = {
+      timeZone: "Asia/Kolkata",
+      year: "numeric" as const,
+      month: "2-digit" as const,
+      day: "2-digit" as const,
+      hour: "2-digit" as const,
+      minute: "2-digit" as const,
+      hour12: false
+    };
+    const formatter = new Intl.DateTimeFormat("en-US", options);
+    const parts = formatter.formatToParts(new Date());
+    const partMap: any = {};
+    for (const part of parts) {
+      partMap[part.type] = part.value;
+    }
+    const todayStr = `${partMap.year}-${partMap.month}-${partMap.day}`;
+    const currentTimeStr = `${partMap.hour}:${partMap.minute}`;
 
-  const activeRemindersCount = useMemo(
-    () => filteredRecords.filter(r => r.reminderEnabled && r.callStatus !== 'Payment Done').length,
-    [filteredRecords]
-  );
+    return filteredRecords
+      .filter((record) => {
+        // Must have reminder enabled and a follow up date set
+        if (!record.reminderEnabled || !record.followUpDate) return false;
+        // Must not be resolved
+        if (record.callStatus === "Payment Done" || record.status === "Closed" || record.status === "Payment Clear") return false;
+        
+        // Reminder must not have passed
+        const isFutureDate = record.followUpDate > todayStr;
+        const isTodayFutureTime = record.followUpDate === todayStr && (!record.followUpTime || record.followUpTime > currentTimeStr);
+        return isFutureDate || isTodayFutureTime;
+      })
+      .sort((a, b) => (a.followUpDate || "9999").localeCompare(b.followUpDate || "9999"));
+  }, [filteredRecords]);
+
+  const activeRemindersCount = useMemo(() => {
+    // Get current Indian Standard Time (IST) components
+    const options = {
+      timeZone: "Asia/Kolkata",
+      year: "numeric" as const,
+      month: "2-digit" as const,
+      day: "2-digit" as const,
+      hour: "2-digit" as const,
+      minute: "2-digit" as const,
+      hour12: false
+    };
+    const formatter = new Intl.DateTimeFormat("en-US", options);
+    const parts = formatter.formatToParts(new Date());
+    const partMap: any = {};
+    for (const part of parts) {
+      partMap[part.type] = part.value;
+    }
+    const todayStr = `${partMap.year}-${partMap.month}-${partMap.day}`;
+    const currentTimeStr = `${partMap.hour}:${partMap.minute}`;
+
+    return filteredRecords.filter(record => {
+      if (!record.reminderEnabled || !record.followUpDate) return false;
+      if (record.callStatus === "Payment Done" || record.status === "Closed" || record.status === "Payment Clear") return false;
+      
+      const isFutureDate = record.followUpDate > todayStr;
+      const isTodayFutureTime = record.followUpDate === todayStr && (!record.followUpTime || record.followUpTime > currentTimeStr);
+      return isFutureDate || isTodayFutureTime;
+    }).length;
+  }, [filteredRecords]);
 
   const riskBands = useMemo(() => {
     const bands = [
