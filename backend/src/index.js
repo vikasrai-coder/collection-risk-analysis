@@ -46,21 +46,6 @@ function cleanupAndResetStaleRecords(records) {
   const currentTimeStr = `${partMap.hour}:${partMap.minute}`; // "HH:MM"
 
   return records.map(rec => {
-    let recordUpdateDateIst = "";
-    if (rec.updatedAt) {
-      try {
-        const uDate = new Date(rec.updatedAt);
-        const uParts = formatter.formatToParts(uDate);
-        const uMap = {};
-        for (const p of uParts) {
-          uMap[p.type] = p.value;
-        }
-        recordUpdateDateIst = `${uMap.year}-${uMap.month}-${uMap.day}`;
-      } catch (e) {
-        recordUpdateDateIst = rec.updatedAt.slice(0, 10);
-      }
-    }
-
     // 1. Check if reminder has passed
     let reminderPassed = false;
     if (rec.followUpDate) {
@@ -73,39 +58,12 @@ function cleanupAndResetStaleRecords(records) {
       }
     }
 
-    // 2. Determine if it is a new day relative to the record's last update
-    const isNewDay = recordUpdateDateIst && recordUpdateDateIst < todayStr;
-
-    // Check if the record is resolved (Payment Done, Closed, Payment Clear)
-    const isResolved = rec.callStatus === "Payment Done" || rec.status === "Closed" || rec.status === "Payment Clear";
-
     // Copy record to update it
     let updatedRec = { ...rec };
 
     if (reminderPassed) {
       // If reminder has passed, disable it so it won't show/alert anymore
       updatedRec.reminderEnabled = false;
-      
-      // If it's a new day or if the reminder has passed and NOT resolved, reset call status for fresh calling
-      if (isNewDay || !isResolved) {
-        updatedRec.callStatus = "Pending";
-        updatedRec.remark = "";
-        updatedRec.followUpDate = "";
-        updatedRec.followUpTime = "";
-      }
-    } else if (isNewDay && !isResolved) {
-      // If it's a new day and NOT resolved, reset call status for fresh calling
-      // But if there is a FUTURE scheduled reminder, we keep it intact!
-      const hasFutureReminder = rec.reminderEnabled && rec.followUpDate && 
-        (rec.followUpDate > todayStr || (rec.followUpDate === todayStr && rec.followUpTime && rec.followUpTime > currentTimeStr));
-        
-      if (!hasFutureReminder) {
-        updatedRec.callStatus = "Pending";
-        updatedRec.remark = "";
-        updatedRec.followUpDate = "";
-        updatedRec.followUpTime = "";
-        updatedRec.reminderEnabled = false;
-      }
     }
 
     return updatedRec;

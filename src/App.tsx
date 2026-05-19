@@ -378,7 +378,7 @@ function cleanupAndResetStaleRecords(records: CollectionRecord[]): CollectionRec
   const formatter = new Intl.DateTimeFormat("en-US", options);
   const parts = formatter.formatToParts(new Date());
   
-  const partMap: any = {};
+  const partMap: Record<string, string> = {};
   for (const part of parts) {
     partMap[part.type] = part.value;
   }
@@ -387,21 +387,6 @@ function cleanupAndResetStaleRecords(records: CollectionRecord[]): CollectionRec
   const currentTimeStr = `${partMap.hour}:${partMap.minute}`; // "HH:MM"
 
   return records.map(rec => {
-    let recordUpdateDateIst = "";
-    if (rec.updatedAt) {
-      try {
-        const uDate = new Date(rec.updatedAt);
-        const uParts = formatter.formatToParts(uDate);
-        const uMap: any = {};
-        for (const p of uParts) {
-          uMap[p.type] = p.value;
-        }
-        recordUpdateDateIst = `${uMap.year}-${uMap.month}-${uMap.day}`;
-      } catch (e) {
-        recordUpdateDateIst = rec.updatedAt.slice(0, 10);
-      }
-    }
-
     // 1. Check if reminder has passed
     let reminderPassed = false;
     if (rec.followUpDate) {
@@ -414,43 +399,51 @@ function cleanupAndResetStaleRecords(records: CollectionRecord[]): CollectionRec
       }
     }
 
-    // 2. Determine if it is a new day relative to the record's last update
-    const isNewDay = recordUpdateDateIst && recordUpdateDateIst < todayStr;
-
-    // Check if the record is resolved (Payment Done, Closed, Payment Clear)
-    const isResolved = rec.callStatus === "Payment Done" || rec.status === "Closed" || rec.status === "Payment Clear";
-
     // Copy record to update it
-    let updatedRec = { ...rec };
-
-    if (reminderPassed) {
-      // If reminder has passed, disable it so it won't show/alert anymore
-      updatedRec.reminderEnabled = false;
-      
-      // If it's a new day or if the reminder has passed and NOT resolved, reset call status for fresh calling
-      if (isNewDay || !isResolved) {
-        updatedRec.callStatus = "Pending";
-        updatedRec.remark = "";
-        updatedRec.followUpDate = "";
-        updatedRec.followUpTime = "";
-      }
-    } else if (isNewDay && !isResolved) {
-      // If it's a new day and NOT resolved, reset call status for fresh calling
-      // But if there is a FUTURE scheduled reminder, we keep it intact!
-      const hasFutureReminder = rec.reminderEnabled && rec.followUpDate && 
-        (rec.followUpDate > todayStr || (rec.followUpDate === todayStr && rec.followUpTime && rec.followUpTime > currentTimeStr));
-        
-      if (!hasFutureReminder) {
-        updatedRec.callStatus = "Pending";
-        updatedRec.remark = "";
-        updatedRec.followUpDate = "";
-        updatedRec.followUpTime = "";
-        updatedRec.reminderEnabled = false;
-      }
-    }
+    const updatedRec = reminderPassed ? { ...rec, reminderEnabled: false } : rec;
 
     return updatedRec;
   });
+}
+
+function getTodayIstString(): string {
+  const options = {
+    timeZone: "Asia/Kolkata",
+    year: "numeric" as const,
+    month: "2-digit" as const,
+    day: "2-digit" as const,
+  };
+  const formatter = new Intl.DateTimeFormat("en-US", options);
+  const parts = formatter.formatToParts(new Date());
+  const partMap: Record<string, string> = {};
+  for (const part of parts) {
+    partMap[part.type] = part.value;
+  }
+  return `${partMap.year}-${partMap.month}-${partMap.day}`;
+}
+
+function isDateTodayIst(dateString: string | undefined | null): boolean {
+  if (!dateString) return false;
+  const todayStr = getTodayIstString();
+  try {
+    const uDate = new Date(dateString);
+    const options = {
+      timeZone: "Asia/Kolkata",
+      year: "numeric" as const,
+      month: "2-digit" as const,
+      day: "2-digit" as const,
+    };
+    const formatter = new Intl.DateTimeFormat("en-US", options);
+    const uParts = formatter.formatToParts(uDate);
+    const uMap: Record<string, string> = {};
+    for (const p of uParts) {
+      uMap[p.type] = p.value;
+    }
+    const recordDateIst = `${uMap.year}-${uMap.month}-${uMap.day}`;
+    return recordDateIst === todayStr;
+  } catch (e) {
+    return dateString.slice(0, 10) === todayStr;
+  }
 }
 
 function openCollectionRiskDb(): Promise<IDBDatabase> {
@@ -1127,7 +1120,9 @@ function App() {
   const summary = useMemo(() => {
     const totalLoanAmount = filteredRecords.reduce((sum, record) => sum + record.loanAmount, 0);
     const totalDefaultAmount = filteredRecords.reduce((sum, record) => sum + record.defaultAmount, 0);
-    const paymentDoneCount = filteredRecords.filter((record) => record.callStatus === "Payment Done").length;
+    const paymentDoneCount = filteredRecords.filter(
+      (record) => record.callStatus === "Payment Done" && isDateTodayIst(record.updatedAt)
+    ).length;
     const remindersCount = filteredRecords.filter((record) => record.reminderEnabled && record.followUpDate).length;
     const avgRisk = filteredRecords.length
       ? Math.round(filteredRecords.reduce((sum, record) => sum + Number(record.riskScore || 0), 0) / filteredRecords.length)
@@ -1144,7 +1139,7 @@ function App() {
   }, [filteredRecords]);
 
   const dailyHandledRecords = useMemo(() => {
-    return filteredRecords.filter((record) => !!record.updatedAt);
+    return filteredRecords.filter((record) => isDateTodayIst(record.updatedAt));
   }, [filteredRecords]);
 
   const dailyHandledAmount = useMemo(() => {
@@ -1381,11 +1376,24 @@ function App() {
 
   const followupGroups = useMemo(() => {
     const groups = new Map<string, FollowupGroup>();
+    const todayStr = getTodayIstString();
 
     for (const record of filteredRecords) {
       if (record.callStatus === "Payment Done" || record.status === "Closed" || record.status === "Payment Clear") {
         continue;
       }
+
+      // Check if this record was updated today (in IST)
+      const isUpdatedToday = isDateTodayIst(record.updatedAt);
+
+      const displayCallStatus = isUpdatedToday ? (record.callStatus || "Pending") : "Pending";
+      const displayRemark = isUpdatedToday ? (record.remark || "") : "";
+
+      // For followUpDate/time, show if updated today or if there's a future scheduled reminder
+      const hasFutureReminder = record.followUpDate && record.followUpDate >= todayStr;
+      const displayFollowUpDate = (isUpdatedToday || hasFutureReminder) ? record.followUpDate : "";
+      const displayFollowUpTime = (isUpdatedToday || hasFutureReminder) ? (record.followUpTime || "") : "";
+
       const groupKey = makeFollowupGroupKey(record);
       const existing = groups.get(groupKey);
       if (existing) {
@@ -1393,16 +1401,24 @@ function App() {
         existing.totalLoanAmount += record.loanAmount;
         existing.totalDefaultAmount += record.defaultAmount;
         existing.loanCount += 1;
-        if (!existing.remark && record.remark) existing.remark = record.remark;
-        if (!existing.followUpDate && record.followUpDate) {
-          existing.followUpDate = record.followUpDate;
-          existing.followUpTime = record.followUpTime;
+        
+        // Accumulate remarks if updated today
+        if (displayRemark) {
+          existing.remark = existing.remark ? `${existing.remark}; ${displayRemark}` : displayRemark;
+        }
+        
+        if (!existing.followUpDate && displayFollowUpDate) {
+          existing.followUpDate = displayFollowUpDate;
+          existing.followUpTime = displayFollowUpTime;
         }
         if (!existing.mobile && record.mobile) existing.mobile = record.mobile;
         if (!existing.alternateNumber && record.alternateNumber) existing.alternateNumber = record.alternateNumber;
         if (!existing.anchor && record.anchor) existing.anchor = record.anchor;
         if (!existing.customerName && record.customerName) existing.customerName = record.customerName;
-        if (record.updatedAt > existing.updatedAt) existing.updatedAt = record.updatedAt;
+        if (record.updatedAt > existing.updatedAt) {
+          existing.updatedAt = record.updatedAt;
+          existing.callStatus = displayCallStatus;
+        }
       } else {
         groups.set(groupKey, {
           groupKey,
@@ -1413,10 +1429,10 @@ function App() {
           anchor: record.anchor,
           mobile: record.mobile,
           alternateNumber: record.alternateNumber,
-          callStatus: record.callStatus || "Pending",
-          remark: record.remark,
-          followUpDate: record.followUpDate,
-          followUpTime: record.followUpTime || "",
+          callStatus: displayCallStatus,
+          remark: displayRemark,
+          followUpDate: displayFollowUpDate,
+          followUpTime: displayFollowUpTime,
           reminderEnabled: record.reminderEnabled,
           totalLoanAmount: record.loanAmount,
           totalDefaultAmount: record.defaultAmount,
@@ -1508,6 +1524,9 @@ function App() {
           if (existing) {
             if (!valueFromRow(row, ["loanId", "loan_id"])) matchedWithoutLoanId += 1;
 
+            const isNewRemark = !existing.remark && csvRemark;
+            const isNewStatus = (!existing.callStatus || existing.callStatus === "Pending") && csvCallStatus && csvCallStatus !== "Pending";
+
             const updatedRec = {
               ...existing,
               userId,
@@ -1524,19 +1543,35 @@ function App() {
               collectionDate,
               riskScore,
               paymentProbability,
-              // Keep call details completely user-driven!
-              callStatus: existing.callStatus || "Pending",
-              remark: existing.remark || "",
-              followUpDate: existing.followUpDate || "",
-              reminderEnabled: existing.reminderEnabled ?? false,
+              // Keep call details user-driven, but allow import of remarks/status if empty
+              callStatus: existing.callStatus || csvCallStatus || "Pending",
+              remark: existing.remark || csvRemark || "",
+              followUpDate: existing.followUpDate || csvFollowUpDate || "",
+              reminderEnabled: existing.reminderEnabled ?? !!csvFollowUpDate,
               updatedAt: new Date().toISOString(),
             };
             nextByLoanId.set(loanId, updatedRec);
             updated += 1;
+
+            if (isNewRemark || isNewStatus) {
+              newLogs.push({
+                id: `sheet-import-${loanId}-${Date.now()}-${slug()}`,
+                loanId: loanId,
+                userId: userId,
+                customerName: updatedRec.customerName,
+                callStatus: updatedRec.callStatus,
+                remark: updatedRec.remark,
+                followUpDate: updatedRec.followUpDate,
+                followUpTime: updatedRec.followUpTime || "",
+                updatedAt: updatedRec.updatedAt,
+                updatedBy: user?.email || "System Import",
+              });
+            }
           } else {
             const finalCallStatus = csvCallStatus || "Pending";
             const finalRemark = csvRemark || "";
             const finalFollowUpDate = csvFollowUpDate || "";
+            const timestamp = new Date().toISOString();
 
             const newRec = {
               id: slug(),
@@ -1558,10 +1593,25 @@ function App() {
               remark: finalRemark,
               followUpDate: finalFollowUpDate,
               reminderEnabled: !!finalFollowUpDate,
-              updatedAt: new Date().toISOString(),
+              updatedAt: timestamp,
             };
             nextByLoanId.set(loanId, newRec);
             created += 1;
+
+            if (finalRemark || finalCallStatus !== "Pending") {
+              newLogs.push({
+                id: `sheet-import-${loanId}-${Date.now()}-${slug()}`,
+                loanId: loanId,
+                userId: userId,
+                customerName: customerName,
+                callStatus: finalCallStatus,
+                remark: finalRemark,
+                followUpDate: finalFollowUpDate,
+                followUpTime: "",
+                updatedAt: timestamp,
+                updatedBy: user?.email || "System Import",
+              });
+            }
           }
         }
 
