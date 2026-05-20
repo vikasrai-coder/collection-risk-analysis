@@ -59,6 +59,8 @@ type UploadHistory = {
   id: string;
   type: "collection" | "customer";
   fileName: string;
+  fileSize?: number;
+  lastModified?: number;
   processed: number;
   created: number;
   updated: number;
@@ -283,23 +285,42 @@ function restrictToAllowedLenders(records: CollectionRecord[]) {
 }
 
 function makeLoanKey(row: Record<string, unknown>) {
+  // 1. Explicit loanId column (may be empty in many sheets)
   const direct = valueFromRow(row, ["loanId", "loan_id"]);
   if (direct) return getBaseLoanId(direct);
 
-  const fallbacks = [
-    valueFromRow(row, ["invoiceId", "invoice_id"]),
-    valueFromRow(row, ["invoiceNumber", "invoice_number"]),
-    valueFromRow(row, ["referenceId", "reference_id"]),
-    valueFromRow(row, ["utr", "txnRef", "txn_ref"]),
-    valueFromRow(row, ["uuid"]),
-  ].filter(Boolean);
+  // 2. invoiceId — the stable, unique loan identifier in the bounce sheet
+  //    (e.g. "IN-1006"). Each invoice = one loan. Use alone, NOT joined with
+  //    referenceId which is a per-attempt key and changes every bounce event.
+  const invoiceId = valueFromRow(row, ["invoiceId", "invoice_id"]);
+  if (invoiceId) return getBaseLoanId(invoiceId);
 
-  if (fallbacks.length) return getBaseLoanId(fallbacks.join("-"));
+  // 3. invoiceNumber as next best stable reference
+  const invoiceNumber = valueFromRow(row, ["invoiceNumber", "invoice_number"]);
+  if (invoiceNumber) return getBaseLoanId(invoiceNumber);
 
+  // 4. externalRefId — present in some sheets as the lender's loan reference
+  const externalRefId = valueFromRow(row, ["externalRefId", "external_ref_id"]);
+  if (externalRefId) return getBaseLoanId(externalRefId);
+
+  // 5. referenceId — payment attempt key; only use if nothing stable is found
+  const referenceId = valueFromRow(row, ["referenceId", "reference_id"]);
+  if (referenceId) return getBaseLoanId(referenceId);
+
+  // 6. UTR / txn reference
+  const txnRef = valueFromRow(row, ["utr", "txnRef", "txn_ref", "bankUTR", "pgPaymentId"]);
+  if (txnRef) return getBaseLoanId(txnRef);
+
+  // 7. uuid from source system
+  const uuid = valueFromRow(row, ["uuid"]);
+  if (uuid) return getBaseLoanId(uuid);
+
+  // 8. Last resort: stable fields only — no dates
   const userId = valueFromRow(row, ["userId", "user_id", "customer_id", "customerId"]);
-  const date = valueFromRow(row, ["collectionDate", "date", "transactionDate", "collectionDateStr"]);
+  const lender = valueFromRow(row, ["lender", "lenderName", "nbfc"]);
   const instalmentNo = valueFromRow(row, ["instalmentNo", "installmentNo"]);
-  return getBaseLoanId([userId, date, instalmentNo].filter(Boolean).join("-")) || `generated-${slug()}`;
+  const amount = valueFromRow(row, ["principalAmount", "principal_amount", "pendingPrincipalAmount", "loanAmount", "loan_amount"]);
+  return getBaseLoanId([userId, lender, instalmentNo, amount].filter(Boolean).join("-")) || `generated-${slug()}`;
 }
 
 function formatCurrency(value: number) {
@@ -631,7 +652,7 @@ function App() {
   const [search, setSearch] = useState("");
   const [lenderFilter, setLenderFilter] = useState("All");
   const [anchorFilter, setAnchorFilter] = useState("All");
-  const [statusFilter, setStatusFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = useState("Active");
   const [editingId, setEditingId] = useState<string>("");
   const [editingGroups, setEditingGroups] = useState<Record<string, boolean>>({});
   const [followupEditMode, setFollowupEditMode] = useState(false);
@@ -1061,7 +1082,16 @@ function App() {
 
       const matchesLender = lenderFilter === "All" || record.lender === lenderFilter;
       const matchesAnchor = anchorFilter === "All" || record.anchor === anchorFilter;
-      const matchesStatus = statusFilter === "All" || record.callStatus === statusFilter;
+      
+      let matchesStatus = true;
+      if (statusFilter === "Active") {
+        matchesStatus =
+          record.callStatus !== "Payment Done" &&
+          record.status !== "Closed" &&
+          record.status !== "Payment Clear";
+      } else if (statusFilter !== "All") {
+        matchesStatus = record.callStatus === statusFilter;
+      }
 
       return matchesSearch && matchesLender && matchesAnchor && matchesStatus;
     });
@@ -1402,10 +1432,21 @@ function App() {
         existing.totalDefaultAmount += record.defaultAmount;
         existing.loanCount += 1;
         
-        // Accumulate remarks if updated today
+        // Accumulate unique remarks if updated today
         if (displayRemark) {
-          existing.remark = existing.remark ? `${existing.remark}; ${displayRemark}` : displayRemark;
+          const trimmedRemark = displayRemark.trim();
+          if (trimmedRemark) {
+            const currentRemarks = existing.remark
+              ? existing.remark.split("; ").map((r) => r.trim()).filter(Boolean)
+              : [];
+            if (!currentRemarks.includes(trimmedRemark)) {
+              existing.remark = existing.remark
+                ? `${existing.remark}; ${trimmedRemark}`
+                : trimmedRemark;
+            }
+          }
         }
+
         
         if (!existing.followUpDate && displayFollowUpDate) {
           existing.followUpDate = displayFollowUpDate;
@@ -1473,6 +1514,16 @@ function App() {
   }
 
   function parseCollectionFile(file: File) {
+    // Idempotency: warn if same file is processed again, but allow re-processing to support schema updates
+    const isDuplicate = uploadHistory.some(
+      (h) => h.fileName === file.name && h.fileSize === file.size && h.lastModified === file.lastModified
+    );
+
+    if (isDuplicate) {
+      setLastUploadMessage(`Re-processing previously uploaded file: ${file.name}...`);
+    }
+
+
     Papa.parse<Record<string, unknown>>(file, {
       header: true,
       skipEmptyLines: true,
@@ -1527,10 +1578,21 @@ function App() {
           const csvFollowUpDate = valueFromRow(row, ["followUpDate", "follow_up_date", "nextActionDate", "nextCallDate", "followupdate"]);
 
           const existing = nextByLoanId.get(loanId);
+
           if (existing) {
+            // Status Isolation: If record is already resolved, don't overwrite its status with a bounce
+            if (
+              existing.callStatus === "Payment Done" ||
+              existing.status === "Closed" ||
+              existing.status === "Payment Clear"
+            ) {
+              skipped += 1;
+              continue;
+            }
+
             if (!valueFromRow(row, ["loanId", "loan_id"])) matchedWithoutLoanId += 1;
 
-            const isNewRemark = !existing.remark && csvRemark;
+            const isNewRemark = !!csvRemark && existing.remark !== csvRemark;
             const isNewStatus = (!existing.callStatus || existing.callStatus === "Pending") && csvCallStatus && csvCallStatus !== "Pending";
 
             const updatedRec = {
@@ -1556,6 +1618,7 @@ function App() {
               reminderEnabled: existing.reminderEnabled ?? !!csvFollowUpDate,
               updatedAt: new Date().toISOString(),
             };
+            
             nextByLoanId.set(loanId, updatedRec);
             updated += 1;
 
@@ -1566,7 +1629,7 @@ function App() {
                 userId: userId,
                 customerName: updatedRec.customerName,
                 callStatus: updatedRec.callStatus,
-                remark: updatedRec.remark,
+                remark: csvRemark || updatedRec.remark,
                 followUpDate: updatedRec.followUpDate,
                 followUpTime: updatedRec.followUpTime || "",
                 updatedAt: updatedRec.updatedAt,
@@ -1677,11 +1740,16 @@ function App() {
         pushHistory({
           type: "collection",
           fileName: file.name,
+          fileSize: file.size,
+          lastModified: file.lastModified,
           processed: data.length,
           created,
           updated,
-          skipped: skipped + archived,
-          message,
+          skipped,
+          message:
+            matchedWithoutLoanId > 0
+              ? `Matched ${matchedWithoutLoanId} records by fallback key`
+              : undefined,
         });
       },
       error: (error) => {
@@ -2318,6 +2386,20 @@ function App() {
                     </option>
                   ))}
                 </select>
+
+                <select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value)}
+                  className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+                >
+                  <option value="Active">Active only</option>
+                  <option value="All">All status (inc. Closed)</option>
+                  {callStatuses.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
           </header>
@@ -2619,18 +2701,6 @@ function App() {
 
                 <Panel title="Daily Follow-up" subtitle="">
                   <div className="mb-4 flex flex-wrap items-center gap-3">
-                    <select
-                      value={statusFilter}
-                      onChange={(event) => setStatusFilter(event.target.value)}
-                      className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
-                    >
-                      <option value="All">All status</option>
-                      {callStatuses.map((status) => (
-                        <option key={status} value={status}>
-                          {status}
-                        </option>
-                      ))}
-                    </select>
                     <label className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
                       <input
                         type="checkbox"
