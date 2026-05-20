@@ -1481,12 +1481,15 @@ function App() {
         let created = 0;
         let updated = 0;
         let skipped = 0;
+        let archived = 0;
         let matchedWithoutLoanId = 0;
         const current = records;
         const baseRecords = isSeedOnly(current) ? [] : current;
         const byLoanId = new Map(baseRecords.map((record) => [getBaseLoanId(record.loanId) || record.id, { ...record }]));
         const nextByLoanId = new Map(byLoanId);
         const newLogs: InteractionHistoryItem[] = [];
+        // Track every loanId actually present in this upload
+        const uploadedLoanIds = new Set<string>();
 
         for (const row of data) {
           const userId = valueFromRow(row, ["userId", "user_id", "customer_id", "customerId"]);
@@ -1497,6 +1500,9 @@ function App() {
             skipped += 1;
             continue;
           }
+
+          // Mark this loanId as present in today's upload
+          uploadedLoanIds.add(loanId);
 
           const customerName = normalizedText(valueFromRow(row, ["customerName", "customer", "name", "merchant", "merchantName"]));
           const anchor = normalizedText(valueFromRow(row, ["anchor", "anchorName", "anchorPerson"]));
@@ -1615,14 +1621,57 @@ function App() {
           }
         }
 
+        // Auto-archive: any existing active record NOT in today's upload is considered paid/resolved
+        // (lender removed them from the collection sheet = they no longer need follow-up)
+        if (uploadedLoanIds.size > 0) {
+          const archiveTimestamp = new Date().toISOString();
+          for (const [key, rec] of nextByLoanId) {
+            if (uploadedLoanIds.has(key)) continue; // still active in today's upload
+            // Skip already-resolved records
+            if (
+              rec.callStatus === "Payment Done" ||
+              rec.status === "Closed" ||
+              rec.status === "Payment Clear"
+            ) continue;
+
+            const archivedRec = {
+              ...rec,
+              callStatus: "Payment Done",
+              status: "Closed",
+              remark: rec.remark
+                ? `${rec.remark} | Auto-Archived: not in daily upload`
+                : "Payment Done (Auto-Archived)",
+              followUpDate: "",
+              followUpTime: "",
+              reminderEnabled: false,
+              updatedAt: archiveTimestamp,
+            };
+            nextByLoanId.set(key, archivedRec);
+            archived += 1;
+
+            newLogs.push({
+              id: `auto-archive-${key}-${Date.now()}-${slug()}`,
+              loanId: rec.loanId,
+              userId: rec.userId,
+              customerName: rec.customerName,
+              callStatus: "Payment Done",
+              remark: "Auto-Archived: not present in daily upload (customer likely settled)",
+              followUpDate: "",
+              followUpTime: "",
+              updatedAt: archiveTimestamp,
+              updatedBy: "System (Auto-Archive)",
+            });
+          }
+        }
+
         setRecords(restrictToAllowedLenders(Array.from(nextByLoanId.values())));
         if (newLogs.length) {
           setInteractionLogs((prev) => mergeInteractionLogs(prev, newLogs));
         }
 
         const message =
-          created || updated
-            ? `${created} new, ${updated} updated, ${skipped} skipped${matchedWithoutLoanId ? `, ${matchedWithoutLoanId} matched without loanId` : ""}`
+          created || updated || archived
+            ? `${created} new, ${updated} updated, ${archived} auto-archived, ${skipped} skipped${matchedWithoutLoanId ? `, ${matchedWithoutLoanId} matched without loanId` : ""}`
             : `No usable rows found. Check that the CSV has userId and collection columns.`;
         setLastUploadMessage(message);
         pushHistory({
@@ -1631,7 +1680,7 @@ function App() {
           processed: data.length,
           created,
           updated,
-          skipped,
+          skipped: skipped + archived,
           message,
         });
       },
