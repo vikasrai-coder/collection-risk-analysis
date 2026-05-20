@@ -53,6 +53,7 @@ type CollectionRecord = {
   followUpTime?: string;
   reminderEnabled: boolean;
   updatedAt: string;
+  manuallyEditedFields?: string[];
 };
 
 type UploadHistory = {
@@ -91,6 +92,7 @@ type TelegramSettings = {
 
 type Draft = {
   customerName: string;
+  lender?: string;
   mobile: string;
   alternateNumber: string;
   anchor: string;
@@ -1490,6 +1492,7 @@ function App() {
     return (
       drafts[group.groupKey] || {
         customerName: group.customerName,
+        lender: group.lender,
         mobile: group.mobile,
         alternateNumber: group.alternateNumber,
         anchor: group.anchor,
@@ -1599,11 +1602,21 @@ function App() {
               ...existing,
               userId,
               loanId,
-              customerName: customerName || existing.customerName,
-              lender: lender || existing.lender,
-              anchor: anchor || existing.anchor,
-              mobile: mobile || existing.mobile,
-              alternateNumber: alternateNumber || existing.alternateNumber,
+              customerName: existing.manuallyEditedFields?.includes("customerName")
+                ? existing.customerName
+                : (customerName || existing.customerName),
+              lender: existing.manuallyEditedFields?.includes("lender")
+                ? existing.lender
+                : (lender || existing.lender),
+              anchor: existing.manuallyEditedFields?.includes("anchor")
+                ? existing.anchor
+                : (anchor || existing.anchor),
+              mobile: existing.manuallyEditedFields?.includes("mobile")
+                ? existing.mobile
+                : (mobile || existing.mobile),
+              alternateNumber: existing.manuallyEditedFields?.includes("alternateNumber")
+                ? existing.alternateNumber
+                : (alternateNumber || existing.alternateNumber),
               category: category || existing.category,
               status,
               loanAmount,
@@ -1796,10 +1809,18 @@ function App() {
           updated += 1;
           return {
             ...record,
-            anchor: anchor || record.anchor || "",
-            mobile: mobile || record.mobile,
-            alternateNumber: alternateNumber || record.alternateNumber,
-            customerName: customerName || record.customerName,
+            anchor: record.manuallyEditedFields?.includes("anchor")
+              ? record.anchor
+              : (anchor || record.anchor || ""),
+            mobile: record.manuallyEditedFields?.includes("mobile")
+              ? record.mobile
+              : (mobile || record.mobile),
+            alternateNumber: record.manuallyEditedFields?.includes("alternateNumber")
+              ? record.alternateNumber
+              : (alternateNumber || record.alternateNumber),
+            customerName: record.manuallyEditedFields?.includes("customerName")
+              ? record.customerName
+              : (customerName || record.customerName),
           };
         });
 
@@ -1842,6 +1863,7 @@ function App() {
       ...current,
       [record.id]: {
         customerName: record.customerName,
+        lender: record.lender,
         mobile: record.mobile,
         alternateNumber: record.alternateNumber,
         anchor: record.anchor,
@@ -1867,9 +1889,17 @@ function App() {
 
         const paymentDone = draft.callStatus === "Payment Done";
 
+        const editedFields = [...(record.manuallyEditedFields || [])];
+        if (draft.customerName !== record.customerName && !editedFields.includes("customerName")) editedFields.push("customerName");
+        if (draft.lender && draft.lender !== record.lender && !editedFields.includes("lender")) editedFields.push("lender");
+        if (draft.mobile !== record.mobile && !editedFields.includes("mobile")) editedFields.push("mobile");
+        if (draft.alternateNumber !== record.alternateNumber && !editedFields.includes("alternateNumber")) editedFields.push("alternateNumber");
+        if (draft.anchor !== record.anchor && !editedFields.includes("anchor")) editedFields.push("anchor");
+
         updatedRecord = {
           ...record,
           customerName: draft.customerName,
+          lender: draft.lender || record.lender,
           mobile: draft.mobile,
           alternateNumber: draft.alternateNumber,
           anchor: draft.anchor,
@@ -1880,6 +1910,7 @@ function App() {
           reminderEnabled: paymentDone ? false : draft.reminderEnabled,
           updatedAt: new Date().toISOString(),
           updatedBy: user?.email || "Agent",
+          manuallyEditedFields: editedFields,
         } as any;
         return updatedRecord;
       }),
@@ -1918,9 +1949,18 @@ function App() {
         if (isLocked(record)) return record;
 
         const paymentDone = draft.callStatus === "Payment Done";
+
+        const editedFields = [...(record.manuallyEditedFields || [])];
+        if (draft.customerName !== record.customerName && !editedFields.includes("customerName")) editedFields.push("customerName");
+        if (draft.lender && draft.lender !== record.lender && !editedFields.includes("lender")) editedFields.push("lender");
+        if (draft.mobile !== record.mobile && !editedFields.includes("mobile")) editedFields.push("mobile");
+        if (draft.alternateNumber !== record.alternateNumber && !editedFields.includes("alternateNumber")) editedFields.push("alternateNumber");
+        if (draft.anchor !== record.anchor && !editedFields.includes("anchor")) editedFields.push("anchor");
+
         const updated = {
           ...record,
           customerName: draft.customerName,
+          lender: draft.lender || record.lender,
           mobile: draft.mobile,
           alternateNumber: draft.alternateNumber,
           anchor: draft.anchor,
@@ -1931,6 +1971,7 @@ function App() {
           reminderEnabled: paymentDone ? false : !!draft.reminderEnabled,
           updatedAt: timestamp,
           updatedBy: user?.email || "Agent",
+          manuallyEditedFields: editedFields,
         };
 
         newLogs.push({
@@ -2762,7 +2803,18 @@ function App() {
                                   group.customerName || "-"
                                 )}
                               </td>
-                              <td className="py-3">{group.lender}</td>
+                              <td className="py-3">
+                                {editing ? (
+                                  <input
+                                    type="text"
+                                    value={draft.lender || ""}
+                                    onChange={(e) => updateFollowupDraft(group, { lender: e.target.value })}
+                                    className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-sm outline-none focus:border-cyan-400"
+                                  />
+                                ) : (
+                                  group.lender || "-"
+                                )}
+                              </td>
                               <td className="py-3">
                                 {editing ? (
                                   <input
@@ -2776,65 +2828,84 @@ function App() {
                                 )}
                               </td>
                               <td className="py-3">
-                                <div className="space-y-2">
-                                  {group.mobile ? (
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-semibold text-slate-900">{group.mobile}</span>
-                                      <div className="flex gap-1">
-                                        <a
-                                          href={`tel:${group.mobile}`}
-                                          className="rounded-lg border border-slate-200 p-1 text-slate-700 hover:bg-slate-50 transition"
-                                          title="Call Primary"
-                                        >
-                                          <Phone className="h-3.5 w-3.5" />
-                                        </a>
-                                        <a
-                                          href={getWhatsAppLink(group.mobile)}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                          className="rounded-lg border border-slate-200 p-1 text-emerald-700 hover:bg-emerald-50 transition"
-                                          title="WhatsApp Primary"
-                                        >
-                                          <MessageCircle className="h-3.5 w-3.5" />
-                                        </a>
-                                        <a
-                                          href={`https://console.kredmint.in/merchant/dashboard/?userId=${group.userId}`}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="rounded-lg border border-slate-200 p-1 text-cyan-600 hover:bg-cyan-50 transition"
-                                          title="Kredmint Console"
-                                        >
-                                          <ArrowUpRight className="h-3.5 w-3.5" />
-                                        </a>
+                                {editing ? (
+                                  <div className="space-y-1">
+                                    <input
+                                      type="text"
+                                      value={draft.mobile || ""}
+                                      onChange={(e) => updateFollowupDraft(group, { mobile: e.target.value })}
+                                      placeholder="Primary Mobile"
+                                      className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-xs outline-none focus:border-cyan-400 block"
+                                    />
+                                    <input
+                                      type="text"
+                                      value={draft.alternateNumber || ""}
+                                      onChange={(e) => updateFollowupDraft(group, { alternateNumber: e.target.value })}
+                                      placeholder="Alt Mobile"
+                                      className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-xs outline-none focus:border-cyan-400 block"
+                                    />
+                                  </div>
+                                ) : (
+                                  <div className="space-y-2">
+                                    {group.mobile ? (
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-semibold text-slate-900">{group.mobile}</span>
+                                        <div className="flex gap-1">
+                                          <a
+                                            href={`tel:${group.mobile}`}
+                                            className="rounded-lg border border-slate-200 p-1 text-slate-700 hover:bg-slate-50 transition"
+                                            title="Call Primary"
+                                          >
+                                            <Phone className="h-3.5 w-3.5" />
+                                          </a>
+                                          <a
+                                            href={getWhatsAppLink(group.mobile)}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="rounded-lg border border-slate-200 p-1 text-emerald-700 hover:bg-emerald-50 transition"
+                                            title="WhatsApp Primary"
+                                          >
+                                            <MessageCircle className="h-3.5 w-3.5" />
+                                          </a>
+                                          <a
+                                            href={`https://console.kredmint.in/merchant/dashboard/?userId=${group.userId}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="rounded-lg border border-slate-200 p-1 text-cyan-600 hover:bg-cyan-50 transition"
+                                            title="Kredmint Console"
+                                          >
+                                            <ArrowUpRight className="h-3.5 w-3.5" />
+                                          </a>
+                                        </div>
                                       </div>
-                                    </div>
-                                  ) : (
-                                    <span className="text-slate-400">-</span>
-                                  )}
-                                  {group.alternateNumber ? (
-                                    <div className="flex items-center gap-2 border-t border-slate-100 pt-1.5">
-                                      <span className="text-xs text-slate-500">{group.alternateNumber}</span>
-                                      <div className="flex gap-1">
-                                        <a
-                                          href={`tel:${group.alternateNumber}`}
-                                          className="rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-slate-50 transition"
-                                          title="Call Alternate"
-                                        >
-                                          <Phone className="h-3.5 w-3.5" />
-                                        </a>
-                                        <a
-                                          href={getWhatsAppLink(group.alternateNumber)}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                          className="rounded-lg border border-slate-200 p-1 text-emerald-600 hover:bg-emerald-50 transition"
-                                          title="WhatsApp Alternate"
-                                        >
-                                          <MessageCircle className="h-3.5 w-3.5" />
-                                        </a>
+                                    ) : (
+                                      <span className="text-slate-400">-</span>
+                                    )}
+                                    {group.alternateNumber ? (
+                                      <div className="flex items-center gap-2 border-t border-slate-100 pt-1.5">
+                                        <span className="text-xs text-slate-500">{group.alternateNumber}</span>
+                                        <div className="flex gap-1">
+                                          <a
+                                            href={`tel:${group.alternateNumber}`}
+                                            className="rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-slate-50 transition"
+                                            title="Call Alternate"
+                                          >
+                                            <Phone className="h-3.5 w-3.5" />
+                                          </a>
+                                          <a
+                                            href={getWhatsAppLink(group.alternateNumber)}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="rounded-lg border border-slate-200 p-1 text-emerald-600 hover:bg-emerald-50 transition"
+                                            title="WhatsApp Alternate"
+                                          >
+                                            <MessageCircle className="h-3.5 w-3.5" />
+                                          </a>
+                                        </div>
                                       </div>
-                                    </div>
-                                  ) : null}
-                                </div>
+                                    ) : null}
+                                  </div>
+                                )}
                               </td>
                               <td className="py-3">
                                 <div className="font-semibold">{formatCurrency(group.totalDefaultAmount)}</div>
@@ -3101,6 +3172,39 @@ function App() {
                                     onChange={(e) => updateFollowupDraft(group, { anchor: e.target.value })}
                                     className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 text-xs outline-none focus:border-cyan-400 focus:bg-white transition"
                                     placeholder="Anchor Partner"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-3 gap-3">
+                                <div className="space-y-1 col-span-1">
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Lender</label>
+                                  <input
+                                    type="text"
+                                    value={draft.lender || ""}
+                                    onChange={(e) => updateFollowupDraft(group, { lender: e.target.value })}
+                                    className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 text-xs outline-none focus:border-cyan-400 focus:bg-white transition"
+                                    placeholder="Lender"
+                                  />
+                                </div>
+                                <div className="space-y-1 col-span-1">
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Primary Mobile</label>
+                                  <input
+                                    type="text"
+                                    value={draft.mobile || ""}
+                                    onChange={(e) => updateFollowupDraft(group, { mobile: e.target.value })}
+                                    className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 text-xs outline-none focus:border-cyan-400 focus:bg-white transition"
+                                    placeholder="Primary Mobile"
+                                  />
+                                </div>
+                                <div className="space-y-1 col-span-1">
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Alternate Mobile</label>
+                                  <input
+                                    type="text"
+                                    value={draft.alternateNumber || ""}
+                                    onChange={(e) => updateFollowupDraft(group, { alternateNumber: e.target.value })}
+                                    className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 text-xs outline-none focus:border-cyan-400 focus:bg-white transition"
+                                    placeholder="Alt Mobile"
                                   />
                                 </div>
                               </div>
