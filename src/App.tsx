@@ -549,30 +549,15 @@ async function pushBackendState(
 }
 
 function isLocked(record: CollectionRecord) {
-  return record.callStatus === "Payment Done" && record.updatedAt.slice(0, 10) === todayIso();
+  return record.callStatus === "Payment Done";
 }
 
 function mergeInteractionLogs(prev: InteractionHistoryItem[], newLogs: InteractionHistoryItem[]): InteractionHistoryItem[] {
-  const next = [...prev];
-  for (const newLog of newLogs) {
-    const newDateStr = newLog.updatedAt.slice(0, 10);
-    const existingIndex = next.findIndex(
-      (log) => log.loanId === newLog.loanId && log.updatedAt.slice(0, 10) === newDateStr
-    );
-    if (existingIndex > -1) {
-      next[existingIndex] = {
-        ...next[existingIndex],
-        callStatus: newLog.callStatus || next[existingIndex].callStatus,
-        remark: newLog.remark || next[existingIndex].remark,
-        followUpDate: newLog.followUpDate || next[existingIndex].followUpDate,
-        updatedAt: newLog.updatedAt,
-        updatedBy: newLog.updatedBy,
-      };
-    } else {
-      next.unshift(newLog);
-    }
-  }
-  return next;
+  // Always append new logs without overwriting existing entries.
+  // Each agent action and sheet-import is a distinct chronological event.
+  const existingIds = new Set(prev.map((l) => l.id));
+  const toAdd = newLogs.filter((l) => !existingIds.has(l.id));
+  return [...toAdd, ...prev];
 }
 
 function loadRecords() {
@@ -649,6 +634,7 @@ function App() {
   const [activePage, setActivePage] = useState<Page>("dashboard");
   const [mobileShowDashboardDetails, setMobileShowDashboardDetails] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showPaymentDoneList, setShowPaymentDoneList] = useState(false);
   const [records, setRecords] = useState<CollectionRecord[]>([]);
   const [uploadHistory, setUploadHistory] = useState<UploadHistory[]>([]);
   const [search, setSearch] = useState("");
@@ -1152,8 +1138,9 @@ function App() {
   const summary = useMemo(() => {
     const totalLoanAmount = filteredRecords.reduce((sum, record) => sum + record.loanAmount, 0);
     const totalDefaultAmount = filteredRecords.reduce((sum, record) => sum + record.defaultAmount, 0);
-    const paymentDoneCount = filteredRecords.filter(
-      (record) => record.callStatus === "Payment Done" && isDateTodayIst(record.updatedAt)
+    // Count ALL payment-done records (not just today's) so the tab shows cumulative closures
+    const paymentDoneCount = records.filter(
+      (record) => record.callStatus === "Payment Done" || record.status === "Closed" || record.status === "Payment Clear"
     ).length;
     const remindersCount = filteredRecords.filter((record) => record.reminderEnabled && record.followUpDate).length;
     const avgRisk = filteredRecords.length
@@ -1168,7 +1155,7 @@ function App() {
       avgRisk,
       customers: new Set(filteredRecords.map((record) => record.userId)).size,
     };
-  }, [filteredRecords]);
+  }, [filteredRecords, records]);
 
   const dailyHandledRecords = useMemo(() => {
     return filteredRecords.filter((record) => isDateTodayIst(record.updatedAt));
@@ -1583,12 +1570,14 @@ function App() {
           const existing = nextByLoanId.get(loanId);
 
           if (existing) {
-            // Status Isolation: If record is already resolved, don't overwrite its status with a bounce
+            // Status Isolation: If record is already resolved, preserve it completely (don't touch payment done records)
             if (
               existing.callStatus === "Payment Done" ||
               existing.status === "Closed" ||
               existing.status === "Payment Clear"
             ) {
+              // Keep the record in nextByLoanId but don't modify it
+              uploadedLoanIds.add(loanId); // prevent auto-archive of payment-done records
               skipped += 1;
               continue;
             }
@@ -1602,21 +1591,24 @@ function App() {
               ...existing,
               userId,
               loanId,
-              customerName: existing.manuallyEditedFields?.includes("customerName")
+              // FIELD PROTECTION: existing non-empty agent-edited values are NEVER overwritten by CSV.
+              // CSV data only fills in blank/missing fields. This covers both manuallyEditedFields
+              // and any value the agent set that wasn't explicitly flagged.
+              customerName: (existing.customerName && existing.customerName.trim())
                 ? existing.customerName
-                : (customerName || existing.customerName),
-              lender: existing.manuallyEditedFields?.includes("lender")
+                : (customerName || ""),
+              lender: (existing.lender && existing.lender.trim())
                 ? existing.lender
-                : (lender || existing.lender),
-              anchor: existing.manuallyEditedFields?.includes("anchor")
+                : (lender || ""),
+              anchor: (existing.anchor && existing.anchor.trim())
                 ? existing.anchor
-                : (anchor || existing.anchor),
-              mobile: existing.manuallyEditedFields?.includes("mobile")
+                : (anchor || ""),
+              mobile: (existing.mobile && existing.mobile.trim())
                 ? existing.mobile
-                : (mobile || existing.mobile),
-              alternateNumber: existing.manuallyEditedFields?.includes("alternateNumber")
+                : (mobile || ""),
+              alternateNumber: (existing.alternateNumber && existing.alternateNumber.trim())
                 ? existing.alternateNumber
-                : (alternateNumber || existing.alternateNumber),
+                : (alternateNumber || ""),
               category: category || existing.category,
               status,
               loanAmount,
@@ -1624,17 +1616,20 @@ function App() {
               collectionDate,
               riskScore,
               paymentProbability,
-              // Keep call details user-driven, but allow import of remarks/status if empty
+              // Keep call details user-driven; never overwrite agent-set values with sheet values
               callStatus: existing.callStatus || csvCallStatus || "Pending",
-              remark: existing.remark || csvRemark || "",
+              // IMPORTANT: always preserve the agent's remark; never reset it from the sheet
+              remark: existing.remark,
               followUpDate: existing.followUpDate || csvFollowUpDate || "",
               reminderEnabled: existing.reminderEnabled ?? !!csvFollowUpDate,
-              updatedAt: new Date().toISOString(),
+              // Preserve the existing updatedAt so the record is NOT seen as "updated today" by the daily followup view
+              updatedAt: existing.updatedAt,
             };
             
             nextByLoanId.set(loanId, updatedRec);
             updated += 1;
 
+            // Only log if the CSV sheet brought in new remarks/status not previously present
             if (isNewRemark || isNewStatus) {
               newLogs.push({
                 id: `sheet-import-${loanId}-${Date.now()}-${slug()}`,
@@ -1642,11 +1637,11 @@ function App() {
                 userId: userId,
                 customerName: updatedRec.customerName,
                 callStatus: updatedRec.callStatus,
-                remark: csvRemark || updatedRec.remark,
+                remark: csvRemark || "",
                 followUpDate: updatedRec.followUpDate,
                 followUpTime: updatedRec.followUpTime || "",
-                updatedAt: updatedRec.updatedAt,
-                updatedBy: user?.email || "System Import",
+                updatedAt: new Date().toISOString(),
+                updatedBy: "System Import",
               });
             }
           } else {
@@ -1806,21 +1801,23 @@ function App() {
           const alternateNumber = normalizePhone(valueFromRow(profile, ["alternateNumber", "alternateMobile", "alternate_mobile", "altMobile"]));
           const customerName = normalizedText(valueFromRow(profile, ["customerName", "customer", "name", "merchant", "merchantName"]));
 
+          // FIELD PROTECTION: existing non-empty values are NEVER overwritten by customer CSV.
+          // Only blank/missing fields get filled in.
           updated += 1;
           return {
             ...record,
-            anchor: record.manuallyEditedFields?.includes("anchor")
+            anchor: (record.anchor && record.anchor.trim())
               ? record.anchor
-              : (anchor || record.anchor || ""),
-            mobile: record.manuallyEditedFields?.includes("mobile")
+              : (anchor || ""),
+            mobile: (record.mobile && record.mobile.trim())
               ? record.mobile
-              : (mobile || record.mobile),
-            alternateNumber: record.manuallyEditedFields?.includes("alternateNumber")
+              : (mobile || ""),
+            alternateNumber: (record.alternateNumber && record.alternateNumber.trim())
               ? record.alternateNumber
-              : (alternateNumber || record.alternateNumber),
-            customerName: record.manuallyEditedFields?.includes("customerName")
+              : (alternateNumber || ""),
+            customerName: (record.customerName && record.customerName.trim())
               ? record.customerName
-              : (customerName || record.customerName),
+              : (customerName || ""),
           };
         });
 
@@ -2735,10 +2732,90 @@ function App() {
                     label="Handled Today"
                     value={`${formatCurrency(dailyHandledAmount)} / ${dailyHandledRecords.length} ${dailyHandledRecords.length === 1 ? "loan" : "loans"}`}
                   />
-                  <MetricCard icon={CheckCircle2} label="Payment Done" value={String(summary.paymentDoneCount)} />
+                  <button
+                    onClick={() => setShowPaymentDoneList((v) => !v)}
+                    className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm text-left hover:bg-emerald-100 transition active:scale-[0.98] cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium text-emerald-700">Payment Done</p>
+                      <div className="rounded-2xl bg-emerald-100 p-2">
+                        <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                      </div>
+                    </div>
+                    <p className="mt-4 text-2xl font-bold tracking-tight text-emerald-800">{summary.paymentDoneCount}</p>
+                    <p className="text-xs text-emerald-600 mt-1">Click to view all closures</p>
+                  </button>
                   <MetricCard icon={Clock3} label="Pending Queue" value={String(filteredRecords.filter((record) => record.callStatus !== "Payment Done" && record.status !== "Closed" && record.status !== "Payment Clear").length)} />
                   <MetricCard icon={BellRing} label="Reminder Queue" value={String(reminderQueue.length)} />
                 </section>
+
+                {/* Payment Done List Panel */}
+                {showPaymentDoneList && (
+                  <div className="rounded-3xl border border-emerald-200 bg-emerald-50/40 p-5 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                        <h3 className="text-base font-bold text-emerald-800">Payment Done — All Closed Cases</h3>
+                        <span className="rounded-full bg-emerald-100 border border-emerald-200 px-2.5 py-0.5 text-xs font-bold text-emerald-700">{summary.paymentDoneCount} records</span>
+                      </div>
+                      <button
+                        onClick={() => setShowPaymentDoneList(false)}
+                        className="rounded-full p-1.5 text-emerald-600 hover:bg-emerald-100 transition"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full text-sm">
+                        <thead className="text-left text-slate-500">
+                          <tr>
+                            <th className="pb-3 font-medium">User</th>
+                            <th className="pb-3 font-medium">Customer</th>
+                            <th className="pb-3 font-medium">Lender</th>
+                            <th className="pb-3 font-medium">Default</th>
+                            <th className="pb-3 font-medium">Closed On</th>
+                            <th className="pb-3 font-medium">Timeline</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {records
+                            .filter((r) => r.callStatus === "Payment Done" || r.status === "Closed" || r.status === "Payment Clear")
+                            .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""))
+                            .map((record) => (
+                              <tr key={record.id} className="border-t border-emerald-100 hover:bg-emerald-50/50 transition">
+                                <td className="py-3 font-semibold">
+                                  <button
+                                    onClick={() => setSelectedUserId(record.userId)}
+                                    className="text-cyan-600 hover:text-cyan-700 hover:underline transition font-semibold"
+                                  >
+                                    {record.userId}
+                                  </button>
+                                </td>
+                                <td className="py-3">{record.customerName || "-"}</td>
+                                <td className="py-3 text-xs text-slate-500">{record.lender || "-"}</td>
+                                <td className="py-3 font-semibold text-emerald-700">{formatCurrency(record.defaultAmount)}</td>
+                                <td className="py-3 text-xs text-slate-500">{formatDate(record.updatedAt)}</td>
+                                <td className="py-3">
+                                  <button
+                                    onClick={() => setSelectedUserId(record.userId)}
+                                    className="inline-flex items-center gap-1 rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-100 transition"
+                                  >
+                                    <History className="h-3 w-3" />
+                                    View Timeline
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          {summary.paymentDoneCount === 0 && (
+                            <tr>
+                              <td colSpan={6} className="py-8 text-center text-slate-400">No payment done records yet.</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
 
                 <Panel title="Daily Follow-up" subtitle="">
                   <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -2925,7 +3002,7 @@ function App() {
                                 ) : (
                                   <div>
                                     <StatusPill value={group.callStatus || "Pending"} />
-                                    <div className="mt-2 max-w-52 text-xs text-slate-500">{group.remark || "-"}</div>
+                                    {/* Remarks are only shown in the timeline (click user ID), not here */}
                                   </div>
                                 )}
                               </td>
@@ -3304,12 +3381,16 @@ function App() {
                                 </span>
                               </div>
 
-                              {group.remark && (
-                                <div className="rounded-2xl bg-slate-50 p-3 border border-slate-100 text-xs text-slate-700">
-                                  <span className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block mb-1">Remarks</span>
-                                  <p className="font-medium">{group.remark}</p>
-                                </div>
-                              )}
+                              {/* Remarks are NOT shown in daily follow-up view; they live in the timeline (click User ID) */}
+                              <div className="rounded-2xl bg-slate-50/50 p-2.5 border border-slate-100 text-xs text-slate-500 italic">
+                                <span className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block mb-0.5">Remarks</span>
+                                <button
+                                  onClick={() => setSelectedUserId(group.userId)}
+                                  className="text-cyan-600 hover:underline font-semibold not-italic"
+                                >
+                                  View in Timeline →
+                                </button>
+                              </div>
 
                               {group.followUpDate && (
                                 <div className="flex items-center gap-2.5 rounded-2xl bg-cyan-50/50 p-3 border border-cyan-100/50 text-xs text-slate-700">
