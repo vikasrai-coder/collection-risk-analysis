@@ -4637,10 +4637,12 @@ function App() {
                               </div>
                             ) : (
                               <div className="relative mt-8 border-l-2 border-slate-200 pl-8 ml-3 space-y-8">
-                                {selectedUserRecord.remarkHistory.map((entry, idx) => (
+                                {[...selectedUserRecord.remarkHistory]
+                                  .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                                  .map((entry, idx) => (
                                   <div key={entry.id} className="relative">
                                     <span className={`absolute -left-[42px] top-1.5 h-5 w-5 rounded-full ${
-                                      idx === selectedUserRecord.remarkHistory!.length - 1
+                                      idx === 0
                                         ? "bg-emerald-500"
                                         : "bg-slate-300"
                                     } ring-4 ring-white`} />
