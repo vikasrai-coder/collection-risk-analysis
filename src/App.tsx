@@ -585,7 +585,7 @@ async function pushBackendState(
       "Content-Type": "application/json",
       ...getAuthHeader()
     },
-    body: JSON.stringify({ records, history, interaction_logs, telegram_settings }),
+    body: JSON.stringify({ records, history, interaction_logs: collapseSheetImportLogs(interaction_logs), telegram_settings }),
   });
 
   if (!response.ok) {
@@ -656,7 +656,70 @@ function mergeInteractionLogs(prev: InteractionHistoryItem[], newLogs: Interacti
   // Each agent action and sheet-import is a distinct chronological event.
   const existingIds = new Set(prev.map((l) => l.id));
   const toAdd = newLogs.filter((l) => !existingIds.has(l.id));
-  return [...toAdd, ...prev];
+  return collapseSheetImportLogs([...toAdd, ...prev]);
+}
+
+function addUniqueRemark(remarks: string[], remark: string, updatedAt?: string) {
+  const trimmed = normalizedText(remark);
+  if (!trimmed) return;
+
+  const alreadyTimestamped = /^\[[^\]]+\]\s/.test(trimmed);
+  const timelineRemark = alreadyTimestamped
+    ? trimmed
+    : `[${formatDateTimeFromIso(updatedAt || new Date().toISOString())}] ${trimmed}`;
+
+  if (!remarks.includes(timelineRemark)) {
+    remarks.push(timelineRemark);
+  }
+}
+
+function collapseSheetImportLogs(logs: InteractionHistoryItem[]): InteractionHistoryItem[] {
+  if (!Array.isArray(logs)) return [];
+
+  const grouped = new Map<string, InteractionHistoryItem & { remarks: string[] }>();
+  const passthrough: InteractionHistoryItem[] = [];
+
+  logs.forEach((log) => {
+    if (!log?.id?.startsWith("sheet-import-") || !log.userId) {
+      passthrough.push(log);
+      return;
+    }
+
+    const importDate = (log.updatedAt || "").slice(0, 10);
+    const key = `${log.userId}|${log.updatedBy || "System Import"}|${importDate}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      addUniqueRemark(existing.remarks, log.remark || "", log.updatedAt);
+      if ((existing.callStatus === "Pending" || !existing.callStatus) && log.callStatus) {
+        existing.callStatus = log.callStatus;
+      }
+      if (!existing.followUpDate && log.followUpDate) {
+        existing.followUpDate = log.followUpDate;
+        existing.followUpTime = log.followUpTime || "";
+      }
+      if (new Date(log.updatedAt || 0).getTime() > new Date(existing.updatedAt || 0).getTime()) {
+        existing.updatedAt = log.updatedAt;
+      }
+      return;
+    }
+
+    const remarks: string[] = [];
+    addUniqueRemark(remarks, log.remark || "", log.updatedAt);
+    grouped.set(key, {
+      ...log,
+      id: log.id.startsWith("sheet-import-user-") ? log.id : `sheet-import-user-${log.userId}-${importDate || slug()}`,
+      remarks,
+    });
+  });
+
+  const collapsed = Array.from(grouped.values()).map(({ remarks, ...log }) => ({
+    ...log,
+    remark: remarks.join("\n"),
+  }));
+
+  return [...passthrough, ...collapsed].sort(
+    (a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime(),
+  );
 }
 
 function loadRecords() {
@@ -811,7 +874,7 @@ function App() {
         setUploadHistory(state.history);
       }
       if (Array.isArray(state.interaction_logs)) {
-        setInteractionLogs(state.interaction_logs);
+        setInteractionLogs(collapseSheetImportLogs(state.interaction_logs));
       }
       if (state.telegram_settings) {
         setTelegramSettings(state.telegram_settings);
@@ -863,7 +926,7 @@ function App() {
         setUploadHistory(state.history);
       }
       if (Array.isArray(state.interaction_logs)) {
-        setInteractionLogs(state.interaction_logs);
+        setInteractionLogs(collapseSheetImportLogs(state.interaction_logs));
       }
       if (state.telegram_settings) {
         setTelegramSettings(state.telegram_settings);
@@ -1088,7 +1151,7 @@ function App() {
         }
 
         if (Array.isArray(state.interaction_logs)) {
-          setInteractionLogs(state.interaction_logs);
+          setInteractionLogs(collapseSheetImportLogs(state.interaction_logs));
         }
 
         if (state.telegram_settings) {
@@ -1663,6 +1726,51 @@ function App() {
         const byLoanId = new Map(baseRecords.map((record) => [getBaseLoanId(record.loanId) || record.id, { ...record }]));
         const nextByLoanId = new Map(byLoanId);
         const newLogs: InteractionHistoryItem[] = [];
+        const sheetImportLogs = new Map<
+          string,
+          {
+            loanId: string;
+            userId: string;
+            customerName: string;
+            callStatus: string;
+            remarks: string[];
+            followUpDate: string;
+            followUpTime: string;
+            updatedAt: string;
+            updatedBy: string;
+          }
+        >();
+        const uploadTimestamp = new Date().toISOString();
+        const addSheetImportLog = (log: Omit<InteractionHistoryItem, "id" | "remark"> & { remark: string }) => {
+          const key = log.userId;
+          const existing = sheetImportLogs.get(key);
+          if (existing) {
+            addUniqueRemark(existing.remarks, log.remark, log.updatedAt);
+            if ((existing.callStatus === "Pending" || !existing.callStatus) && log.callStatus) {
+              existing.callStatus = log.callStatus;
+            }
+            if (!existing.followUpDate && log.followUpDate) {
+              existing.followUpDate = log.followUpDate;
+              existing.followUpTime = log.followUpTime || "";
+            }
+            if (!existing.customerName && log.customerName) existing.customerName = log.customerName;
+            return;
+          }
+
+          const remarks: string[] = [];
+          addUniqueRemark(remarks, log.remark, log.updatedAt);
+          sheetImportLogs.set(key, {
+            loanId: log.loanId,
+            userId: log.userId,
+            customerName: log.customerName,
+            callStatus: log.callStatus || "Pending",
+            remarks,
+            followUpDate: log.followUpDate,
+            followUpTime: log.followUpTime || "",
+            updatedAt: log.updatedAt,
+            updatedBy: log.updatedBy,
+          });
+        };
         // Track every loanId actually present in this upload
         const uploadedLoanIds = new Set<string>();
 
@@ -1768,8 +1876,7 @@ function App() {
 
             // Only log if the CSV sheet brought in new remarks/status not previously present
             if (isNewRemark || isNewStatus) {
-              newLogs.push({
-                id: `sheet-import-${loanId}-${Date.now()}-${slug()}`,
+              addSheetImportLog({
                 loanId: loanId,
                 userId: userId,
                 customerName: updatedRec.customerName,
@@ -1777,7 +1884,7 @@ function App() {
                 remark: csvRemark || "",
                 followUpDate: updatedRec.followUpDate,
                 followUpTime: updatedRec.followUpTime || "",
-                updatedAt: new Date().toISOString(),
+                updatedAt: uploadTimestamp,
                 updatedBy: "System Import",
               });
             }
@@ -1816,8 +1923,7 @@ function App() {
             created += 1;
 
             if (finalRemark || finalCallStatus !== "Pending") {
-              newLogs.push({
-                id: `sheet-import-${loanId}-${Date.now()}-${slug()}`,
+              addSheetImportLog({
                 loanId: loanId,
                 userId: userId,
                 customerName: customerName,
@@ -1831,6 +1937,21 @@ function App() {
             }
           }
         }
+
+        sheetImportLogs.forEach((log) => {
+          newLogs.push({
+            id: `sheet-import-user-${log.userId}-${Date.now()}-${slug()}`,
+            loanId: log.loanId,
+            userId: log.userId,
+            customerName: log.customerName,
+            callStatus: log.callStatus,
+            remark: log.remarks.join("\n"),
+            followUpDate: log.followUpDate,
+            followUpTime: log.followUpTime,
+            updatedAt: log.updatedAt,
+            updatedBy: log.updatedBy,
+          });
+        });
 
         // Auto-archive: any existing active record NOT in today's upload is considered paid/resolved
         // (lender removed them from the collection sheet = they no longer need follow-up)
@@ -4154,7 +4275,7 @@ function App() {
                                     )}
                                   </span>
                                 </td>
-                                <td className="py-4 max-w-xs truncate text-xs text-slate-500" title={remark}>
+                                <td className="py-4 max-w-xs whitespace-pre-line text-xs text-slate-500" title={remark}>
                                   {remark || "N/A"}
                                 </td>
                                 <td className="py-4 text-xs text-slate-600 font-medium">
@@ -4639,7 +4760,7 @@ function App() {
                                         </div>
 
                                         {log.remark && (
-                                          <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-700 font-medium border border-slate-100">
+                                          <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-700 font-medium border border-slate-100 whitespace-pre-line">
                                             {log.remark}
                                           </div>
                                         )}
