@@ -1429,73 +1429,6 @@ function App() {
     };
   }, [selectedUserId, selectedUserRecord, records]);
 
-  const selectedUserLogs = useMemo(() => {
-    if (!selectedUserId) return [];
-    const timelineMinute = (value: string) => {
-      const date = new Date(value || "");
-      if (Number.isNaN(date.getTime())) return value || "";
-      date.setSeconds(0, 0);
-      return date.toISOString();
-    };
-    const logTimelineKey = (log: Pick<InteractionHistoryItem, "userId" | "updatedAt" | "remark" | "updatedBy">) =>
-      `${log.userId}|${timelineMinute(log.updatedAt)}|${normalizedText(log.remark || "").toLowerCase()}|${log.updatedBy || ""}`;
-    const logs: InteractionHistoryItem[] = [];
-    const existingLogKeys = new Set<string>();
-    interactionLogs
-      .filter((log) => log.userId === selectedUserId || log.loanId === selectedUserId)
-      .forEach((log) => {
-        const key = logTimelineKey(log);
-        if (existingLogKeys.has(key)) return;
-        existingLogKeys.add(key);
-        logs.push(log);
-      });
-
-    const selectedRecords = records.filter((r) => r.userId === selectedUserId || r.loanId === selectedUserId);
-    selectedRecords.forEach((record) => {
-      (record.remarkHistory || []).forEach((entry) => {
-        const key = `${record.userId}|${timelineMinute(entry.timestamp)}|${normalizedText(entry.text || "").toLowerCase()}|${entry.addedBy || record.updatedBy || "Agent"}`;
-        if (existingLogKeys.has(key)) return;
-        existingLogKeys.add(key);
-        logs.push({
-          id: `remark-history-${record.id}-${entry.id}`,
-          loanId: record.loanId,
-          userId: record.userId,
-          customerName: record.customerName,
-          callStatus: record.callStatus || record.status || "Pending",
-          remark: entry.text,
-          followUpDate: record.followUpDate,
-          followUpTime: record.followUpTime || "",
-          updatedAt: entry.timestamp,
-          updatedBy: entry.addedBy || record.updatedBy || "Agent",
-        });
-      });
-    });
-
-    // If the active record has a sheet-imported remark or status, synthesize a virtual log
-    // so it shows chronologically inside the Interaction Activity Timeline
-    if (selectedUserRecord && (selectedUserRecord.remark || selectedUserRecord.callStatus)) {
-      const hasInitialLog = logs.some(log => log.id === `initial-sheet-remark-${selectedUserRecord.id}`);
-      const hasSameCurrentRemark = selectedUserRecord.remark
-        ? existingLogKeys.has(`${selectedUserRecord.userId}|${timelineMinute(selectedUserRecord.updatedAt)}|${normalizedText(selectedUserRecord.remark).toLowerCase()}|${(selectedUserRecord as any).updatedBy || user?.email || "System Import"}`)
-        : false;
-      if (!hasInitialLog && !hasSameCurrentRemark) {
-        logs.push({
-          id: `initial-sheet-remark-${selectedUserRecord.id}`,
-          loanId: selectedUserRecord.loanId,
-          userId: selectedUserRecord.userId,
-          customerName: selectedUserRecord.customerName,
-          callStatus: selectedUserRecord.callStatus || selectedUserRecord.status || "Call Back Later",
-          remark: selectedUserRecord.remark,
-          followUpDate: selectedUserRecord.followUpDate,
-          updatedAt: selectedUserRecord.updatedAt || selectedUserRecord.collectionDate || "2026-05-17T10:00:00Z",
-          updatedBy: (selectedUserRecord as any).updatedBy || user?.email || "System Import"
-        });
-      }
-    }
-
-    return logs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-  }, [selectedUserId, interactionLogs, selectedUserRecord, records, user]);
-
   const statusBreakdown = useMemo(() => {
     const source = new Map<string, number>();
     for (const record of filteredRecords) {
@@ -4685,112 +4618,51 @@ function App() {
                             </div>
                           )}
 
-                          {/* Remark History Timeline */}
-                          {selectedUserRecord?.remarkHistory && selectedUserRecord.remarkHistory.length > 0 && (
-                            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
-                              <div className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2">
-                                <History className="h-4 w-4" />
-                                Remark History Timeline
+                        </div>
+
+                        {/* RIGHT COLUMN: Remark history (7 cols) */}
+                        <div className="md:col-span-7 space-y-6 border-t md:border-t-0 md:border-l md:border-slate-200/80 md:pl-6 pt-6 md:pt-0">
+                          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                            <div className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2">
+                              <History className="h-4 w-4" />
+                              Remark History Timeline
+                            </div>
+
+                            {!selectedUserRecord?.remarkHistory || selectedUserRecord.remarkHistory.length === 0 ? (
+                              <div className="flex flex-col items-center justify-center h-72 text-slate-400 text-center px-4">
+                                <div className="rounded-full bg-slate-50 p-4 border border-slate-100 text-slate-300">
+                                  <History className="h-8 w-8 stroke-1" />
+                                </div>
+                                <p className="mt-4 text-sm font-semibold text-slate-700">No remarks added yet</p>
                               </div>
-                              <div className="relative border-l-2 border-slate-200 pl-4 ml-2 space-y-4">
+                            ) : (
+                              <div className="relative mt-8 border-l-2 border-slate-200 pl-8 ml-3 space-y-8">
                                 {selectedUserRecord.remarkHistory.map((entry, idx) => (
                                   <div key={entry.id} className="relative">
-                                    <span className={`absolute -left-[25px] top-2 h-3.5 w-3.5 rounded-full ${
+                                    <span className={`absolute -left-[42px] top-1.5 h-5 w-5 rounded-full ${
                                       idx === selectedUserRecord.remarkHistory!.length - 1
                                         ? "bg-emerald-500"
                                         : "bg-slate-300"
-                                    } ring-2 ring-white`} />
-                                    <div className="space-y-1.5">
-                                      <div className="flex items-center justify-between gap-2">
-                                        <span className="text-[10px] font-bold text-slate-700">{entry.addedBy || "Agent"}</span>
-                                        <span className="text-[9px] text-slate-400">{formatDateTimeFromIso(entry.timestamp)}</span>
+                                    } ring-4 ring-white`} />
+                                    <div className="space-y-3">
+                                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                        <span className="text-sm font-bold text-slate-800">{entry.addedBy || "Agent"}</span>
+                                        <span className="text-sm font-medium text-slate-400">{formatDateTimeFromIso(entry.timestamp)}</span>
                                       </div>
                                       {entry.partialPaymentAmount && (
-                                        <div className="flex items-center gap-2 text-xs bg-amber-50 border border-amber-100 rounded-xl px-2.5 py-1.5">
+                                        <div className="flex flex-wrap items-center gap-2 text-xs bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
                                           <span className="font-bold text-amber-800">Partial: ₹{entry.partialPaymentAmount.toLocaleString("en-IN")}</span>
                                           {entry.invoiceNumber && <span className="text-amber-600">| Invoice: {entry.invoiceNumber}</span>}
                                           {entry.remainingAmount !== undefined && <span className="text-amber-700 font-semibold">| Pending: ₹{entry.remainingAmount.toLocaleString("en-IN")}</span>}
                                         </div>
                                       )}
-                                      <p className="text-xs text-slate-600 leading-relaxed">{entry.text}</p>
+                                      <p className="text-base text-slate-600 leading-relaxed">{entry.text}</p>
                                     </div>
                                   </div>
                                 ))}
                               </div>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* RIGHT COLUMN: Chronological Activity logs (7 cols) */}
-                        <div className="md:col-span-7 space-y-6 border-t md:border-t-0 md:border-l md:border-slate-200/80 md:pl-6 pt-6 md:pt-0">
-                          
-                          {/* Section Title */}
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Interaction Activity Timeline</h4>
-                            </div>
-                            <span className="text-xs font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-2.5 py-0.5 rounded-full">
-                              {selectedUserLogs.length} events
-                            </span>
-                          </div>
-
-                          {/* Timeline Body */}
-                          <div className="space-y-6">
-                            {selectedUserLogs.length === 0 ? (
-                              <div className="flex flex-col items-center justify-center h-72 text-slate-400 text-center px-4 bg-white rounded-3xl border border-slate-200/60 p-6 shadow-sm">
-                                <div className="rounded-full bg-slate-50 p-4 border border-slate-100 text-slate-300">
-                                  <Clock3 className="h-8 w-8 stroke-1" />
-                                </div>
-                                <p className="mt-4 text-sm font-semibold text-slate-700">No interaction history logs found</p>
-                                <p className="text-xs text-slate-500 mt-1 max-w-[280px]">
-                                  Any calls, callbacks, status changes, or comments logged by recovery agents will appear chronologically here.
-                                </p>
-                              </div>
-                            ) : (
-                              <div className="relative border-l-2 border-slate-200 pl-6 ml-3 space-y-8 py-2">
-                                {selectedUserLogs.map((log, index) => {
-                                  const isFirst = index === 0;
-                                  return (
-                                    <div key={log.id} className="relative">
-                                      {/* Node circle */}
-                                      <span className={`absolute -left-[33px] top-1 flex h-4.5 w-4.5 items-center justify-center rounded-full ring-4 ring-slate-50 ${
-                                        isFirst ? "bg-cyan-600 ring-cyan-100" : "bg-slate-300"
-                                      }`}>
-                                        {isFirst && <span className="h-2 w-2 rounded-full bg-white animate-ping" />}
-                                      </span>
-
-                                      {/* Log Details Container */}
-                                      <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm space-y-3 hover:border-slate-300 transition duration-200">
-                                        <div className="flex items-center justify-between text-xs">
-                                          <div className="flex items-center gap-2">
-                                            <span className="font-bold text-slate-800">{log.updatedBy || "Agent"}</span>
-                                            <span className="text-slate-400">•</span>
-                                            <span className="text-slate-500 font-medium">{formatDateTimeFromIso(log.updatedAt)}</span>
-                                          </div>
-                                          <StatusPill value={log.callStatus} />
-                                        </div>
-
-                                        {log.remark && (
-                                          <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-700 font-medium border border-slate-100 whitespace-pre-line">
-                                            {log.remark}
-                                          </div>
-                                        )}
-
-                                        {log.followUpDate && (
-                                          <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-3 py-1.5 w-fit">
-                                            <BellRing className="h-3.5 w-3.5 text-amber-600" />
-                                            <span>Scheduled Callback: {formatDate(log.followUpDate)}</span>
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
                             )}
                           </div>
-
                         </div>
 
                       </div>
