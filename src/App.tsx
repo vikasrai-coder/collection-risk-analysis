@@ -369,6 +369,19 @@ function formatDate(value: string) {
   }).format(date);
 }
 
+function formatDateTimeFromIso(value: string) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function formatDateTime(dateVal: string, timeVal?: string) {
   if (!dateVal) return "-";
   const date = new Date(dateVal);
@@ -590,9 +603,10 @@ function appendRemarkToHistory(
   callStatus: string,
   addedBy: string,
   invoiceNumber?: string,
-  partialPaymentAmount?: number
+  partialPaymentAmount?: number,
+  createdAt = new Date().toISOString()
 ): { updatedRecord: CollectionRecord; remarkEntry: RemarkEntry } {
-  const timestamp = new Date().toISOString();
+  const timestamp = createdAt;
   const remarkId = Math.random().toString(36).substring(2, 9);
 
   // Calculate remaining amount if partial payment
@@ -623,6 +637,9 @@ function appendRemarkToHistory(
     remark: formattedRemark,
     remarkHistory,
     callStatus,
+    followUpDate: callStatus === "Payment Done" ? "" : record.followUpDate,
+    followUpTime: callStatus === "Payment Done" ? "" : record.followUpTime || "",
+    reminderEnabled: callStatus === "Payment Done" ? false : record.reminderEnabled,
     updatedAt: timestamp,
     updatedBy: addedBy,
     partialPaymentSettled: partialPaymentAmount
@@ -792,6 +809,12 @@ function App() {
       }
       if (Array.isArray(state.history) && state.history.length) {
         setUploadHistory(state.history);
+      }
+      if (Array.isArray(state.interaction_logs)) {
+        setInteractionLogs(state.interaction_logs);
+      }
+      if (state.telegram_settings) {
+        setTelegramSettings(state.telegram_settings);
       }
     } catch (err: any) {
       setLoginError(err.message || "Something went wrong. Please check your credentials.");
@@ -1323,7 +1346,9 @@ function App() {
     if (!selectedUserId) return null;
     const userRecords = records.filter((r) => r.userId === selectedUserId || r.loanId === selectedUserId);
     if (userRecords.length === 0) return null;
-    return userRecords.find((r) => r.remark) || userRecords[0];
+    return [...userRecords].sort(
+      (a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime(),
+    )[0];
   }, [selectedUserId, records]);
 
   const selectedUserGroupData = useMemo(() => {
@@ -1346,12 +1371,39 @@ function App() {
     const logs = [...interactionLogs.filter(
       (log) => log.userId === selectedUserId || log.loanId === selectedUserId
     )];
+    const existingLogKeys = new Set(
+      logs.map((log) => `${log.userId}|${log.loanId}|${log.updatedAt}|${log.remark}`),
+    );
+
+    const selectedRecords = records.filter((r) => r.userId === selectedUserId || r.loanId === selectedUserId);
+    selectedRecords.forEach((record) => {
+      (record.remarkHistory || []).forEach((entry) => {
+        const key = `${record.userId}|${record.loanId}|${entry.timestamp}|${entry.text}`;
+        if (existingLogKeys.has(key)) return;
+        existingLogKeys.add(key);
+        logs.push({
+          id: `remark-history-${record.id}-${entry.id}`,
+          loanId: record.loanId,
+          userId: record.userId,
+          customerName: record.customerName,
+          callStatus: record.callStatus || record.status || "Pending",
+          remark: entry.text,
+          followUpDate: record.followUpDate,
+          followUpTime: record.followUpTime || "",
+          updatedAt: entry.timestamp,
+          updatedBy: entry.addedBy || record.updatedBy || "Agent",
+        });
+      });
+    });
 
     // If the active record has a sheet-imported remark or status, synthesize a virtual log
     // so it shows chronologically inside the Interaction Activity Timeline
     if (selectedUserRecord && (selectedUserRecord.remark || selectedUserRecord.callStatus)) {
       const hasInitialLog = logs.some(log => log.id === `initial-sheet-remark-${selectedUserRecord.id}`);
-      if (!hasInitialLog) {
+      const hasSameCurrentRemark = selectedUserRecord.remark
+        ? existingLogKeys.has(`${selectedUserRecord.userId}|${selectedUserRecord.loanId}|${selectedUserRecord.updatedAt}|${selectedUserRecord.remark}`)
+        : false;
+      if (!hasInitialLog && !hasSameCurrentRemark) {
         logs.push({
           id: `initial-sheet-remark-${selectedUserRecord.id}`,
           loanId: selectedUserRecord.loanId,
@@ -1367,7 +1419,7 @@ function App() {
     }
 
     return logs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-  }, [selectedUserId, interactionLogs, selectedUserRecord, user]);
+  }, [selectedUserId, interactionLogs, selectedUserRecord, records, user]);
 
   const statusBreakdown = useMemo(() => {
     const source = new Map<string, number>();
@@ -1966,84 +2018,60 @@ function App() {
     const draft = drafts[recordId];
     if (!draft) return;
 
-    let updatedRecord: CollectionRecord | null = null;
+    const record = records.find((item) => item.id === recordId);
+    if (!record || isLocked(record)) return;
 
-    setRecords((current) =>
-      current.map((record) => {
-        if (record.id !== recordId) return record;
-        if (isLocked(record)) return record;
+    const paymentDone = draft.callStatus === "Payment Done";
 
-        const paymentDone = draft.callStatus === "Payment Done";
+    const editedFields = [...(record.manuallyEditedFields || [])];
+    if (draft.customerName !== record.customerName && !editedFields.includes("customerName")) editedFields.push("customerName");
+    if (draft.lender && draft.lender !== record.lender && !editedFields.includes("lender")) editedFields.push("lender");
+    if (draft.mobile !== record.mobile && !editedFields.includes("mobile")) editedFields.push("mobile");
+    if (draft.alternateNumber !== record.alternateNumber && !editedFields.includes("alternateNumber")) editedFields.push("alternateNumber");
+    if (draft.anchor !== record.anchor && !editedFields.includes("anchor")) editedFields.push("anchor");
 
-        const editedFields = [...(record.manuallyEditedFields || [])];
-        if (draft.customerName !== record.customerName && !editedFields.includes("customerName")) editedFields.push("customerName");
-        if (draft.lender && draft.lender !== record.lender && !editedFields.includes("lender")) editedFields.push("lender");
-        if (draft.mobile !== record.mobile && !editedFields.includes("mobile")) editedFields.push("mobile");
-        if (draft.alternateNumber !== record.alternateNumber && !editedFields.includes("alternateNumber")) editedFields.push("alternateNumber");
-        if (draft.anchor !== record.anchor && !editedFields.includes("anchor")) editedFields.push("anchor");
+    const baseRecord = {
+      ...record,
+      customerName: draft.customerName,
+      lender: draft.lender || record.lender,
+      mobile: draft.mobile,
+      alternateNumber: draft.alternateNumber,
+      anchor: draft.anchor,
+      manuallyEditedFields: editedFields,
+    };
+    const newRemark = (paymentDone ? "Payment Done" : draft.remark).trim();
+    const finalRecord = newRemark
+      ? appendRemarkToHistory(
+          baseRecord,
+          newRemark,
+          draft.callStatus,
+          user?.email || "Agent",
+          draft.invoiceNumber,
+          draft.partialPaymentAmount,
+        ).updatedRecord
+      : {
+          ...baseRecord,
+          callStatus: draft.callStatus,
+          followUpDate: paymentDone ? "" : draft.followUpDate,
+          followUpTime: paymentDone ? "" : draft.followUpTime || "",
+          reminderEnabled: paymentDone ? false : draft.reminderEnabled,
+          updatedAt: new Date().toISOString(),
+          updatedBy: user?.email || "Agent",
+        };
 
-        // Handle remark with history
-        const newRemark = paymentDone ? "Payment Done" : draft.remark;
-        const hasNewRemark = newRemark && newRemark !== record.remark;
-        
-        let finalRecord: CollectionRecord;
-        if (hasNewRemark) {
-          const { updatedRecord: recordWithHistory } = appendRemarkToHistory(
-            {
-              ...record,
-              customerName: draft.customerName,
-              lender: draft.lender || record.lender,
-              mobile: draft.mobile,
-              alternateNumber: draft.alternateNumber,
-              anchor: draft.anchor,
-              manuallyEditedFields: editedFields,
-            },
-            newRemark,
-            draft.callStatus,
-            user?.email || "Agent",
-            draft.invoiceNumber,
-            draft.partialPaymentAmount
-          );
-          finalRecord = recordWithHistory;
-        } else {
-          finalRecord = {
-            ...record,
-            customerName: draft.customerName,
-            lender: draft.lender || record.lender,
-            mobile: draft.mobile,
-            alternateNumber: draft.alternateNumber,
-            anchor: draft.anchor,
-            callStatus: draft.callStatus,
-            followUpDate: paymentDone ? "" : draft.followUpDate,
-            followUpTime: paymentDone ? "" : draft.followUpTime || "",
-            reminderEnabled: paymentDone ? false : draft.reminderEnabled,
-            updatedAt: new Date().toISOString(),
-            updatedBy: user?.email || "Agent",
-            manuallyEditedFields: editedFields,
-          };
-        }
-
-        updatedRecord = finalRecord;
-        return updatedRecord;
-      }),
-    );
-
-    if (updatedRecord) {
-      const rec = updatedRecord as CollectionRecord;
-      const newLog: InteractionHistoryItem = {
-        id: Math.random().toString(36).substring(2, 9),
-        loanId: rec.loanId,
-        userId: rec.userId,
-        customerName: rec.customerName,
-        callStatus: rec.callStatus,
-        remark: rec.remark,
-        followUpDate: rec.followUpDate,
-        followUpTime: rec.followUpTime || "",
-        updatedAt: rec.updatedAt,
-        updatedBy: user?.email || "Agent",
-      };
-      setInteractionLogs((prev) => mergeInteractionLogs(prev, [newLog]));
-    }
+    setRecords((current) => current.map((item) => (item.id === recordId ? finalRecord : item)));
+    setInteractionLogs((prev) => mergeInteractionLogs(prev, [{
+      id: `${finalRecord.id}-${finalRecord.updatedAt}-${slug()}`,
+      loanId: finalRecord.loanId,
+      userId: finalRecord.userId,
+      customerName: finalRecord.customerName,
+      callStatus: finalRecord.callStatus,
+      remark: finalRecord.remark,
+      followUpDate: finalRecord.followUpDate,
+      followUpTime: finalRecord.followUpTime || "",
+      updatedAt: finalRecord.updatedAt,
+      updatedBy: user?.email || "Agent",
+    }]));
 
     setEditingId("");
   }
@@ -2052,84 +2080,73 @@ function App() {
     const draft = draftsRef.current[groupKey];
     if (!draft) return;
 
-    const newLogs: InteractionHistoryItem[] = [];
     const timestamp = new Date().toISOString();
+    const agent = user?.email || "Agent";
+    const updatedRecords: CollectionRecord[] = [];
 
-    setRecords((current) =>
-      current.map((record) => {
-        if (!sourceIds.includes(record.id)) return record;
-        if (isLocked(record)) return record;
+    const nextRecords = records.map((record) => {
+      if (!sourceIds.includes(record.id) || isLocked(record)) return record;
 
-        const paymentDone = draft.callStatus === "Payment Done";
+      const paymentDone = draft.callStatus === "Payment Done";
 
-        const editedFields = [...(record.manuallyEditedFields || [])];
-        if (draft.customerName !== record.customerName && !editedFields.includes("customerName")) editedFields.push("customerName");
-        if (draft.lender && draft.lender !== record.lender && !editedFields.includes("lender")) editedFields.push("lender");
-        if (draft.mobile !== record.mobile && !editedFields.includes("mobile")) editedFields.push("mobile");
-        if (draft.alternateNumber !== record.alternateNumber && !editedFields.includes("alternateNumber")) editedFields.push("alternateNumber");
-        if (draft.anchor !== record.anchor && !editedFields.includes("anchor")) editedFields.push("anchor");
+      const editedFields = [...(record.manuallyEditedFields || [])];
+      if (draft.customerName !== record.customerName && !editedFields.includes("customerName")) editedFields.push("customerName");
+      if (draft.lender && draft.lender !== record.lender && !editedFields.includes("lender")) editedFields.push("lender");
+      if (draft.mobile !== record.mobile && !editedFields.includes("mobile")) editedFields.push("mobile");
+      if (draft.alternateNumber !== record.alternateNumber && !editedFields.includes("alternateNumber")) editedFields.push("alternateNumber");
+      if (draft.anchor !== record.anchor && !editedFields.includes("anchor")) editedFields.push("anchor");
 
-        // Handle remark with history
-        const newRemark = paymentDone ? "Payment Done" : draft.remark;
-        const hasNewRemark = newRemark && newRemark !== record.remark;
-
-        let updated: CollectionRecord;
-        if (hasNewRemark) {
-          const { updatedRecord: recordWithHistory } = appendRemarkToHistory(
-            {
-              ...record,
-              customerName: draft.customerName,
-              lender: draft.lender || record.lender,
-              mobile: draft.mobile,
-              alternateNumber: draft.alternateNumber,
-              anchor: draft.anchor,
-              manuallyEditedFields: editedFields,
-            },
+      const baseRecord = {
+        ...record,
+        customerName: draft.customerName,
+        lender: draft.lender || record.lender,
+        mobile: draft.mobile,
+        alternateNumber: draft.alternateNumber,
+        anchor: draft.anchor,
+        manuallyEditedFields: editedFields,
+      };
+      const newRemark = (paymentDone ? "Payment Done" : draft.remark).trim();
+      const updated = newRemark
+        ? appendRemarkToHistory(
+            baseRecord,
             newRemark,
             draft.callStatus,
-            user?.email || "Agent",
+            agent,
             draft.invoiceNumber,
-            draft.partialPaymentAmount
-          );
-          updated = recordWithHistory;
-        } else {
-          updated = {
-            ...record,
-            customerName: draft.customerName,
-            lender: draft.lender || record.lender,
-            mobile: draft.mobile,
-            alternateNumber: draft.alternateNumber,
-            anchor: draft.anchor,
+            draft.partialPaymentAmount,
+            timestamp,
+          ).updatedRecord
+        : {
+            ...baseRecord,
             callStatus: draft.callStatus,
             followUpDate: paymentDone ? "" : draft.followUpDate,
             followUpTime: paymentDone ? "" : draft.followUpTime || "",
             reminderEnabled: paymentDone ? false : !!draft.reminderEnabled,
             updatedAt: timestamp,
-            updatedBy: user?.email || "Agent",
-            manuallyEditedFields: editedFields,
+            updatedBy: agent,
           };
-        }
 
-        newLogs.push({
-          id: Math.random().toString(36).substring(2, 9),
-          loanId: updated.loanId,
-          userId: updated.userId,
-          customerName: updated.customerName,
-          callStatus: updated.callStatus,
-          remark: updated.remark,
-          followUpDate: updated.followUpDate,
-          followUpTime: updated.followUpTime || "",
-          updatedAt: timestamp,
-          updatedBy: user?.email || "Agent",
-        });
+      updatedRecords.push(updated);
+      return updated;
+    });
 
-        return updated;
-      }),
-    );
+    if (!updatedRecords.length) return;
 
-    if (newLogs.length) {
-      setInteractionLogs((prev) => mergeInteractionLogs(prev, newLogs));
-    }
+    setRecords(nextRecords);
+
+    const primaryRecord = updatedRecords[0];
+    setInteractionLogs((prev) => mergeInteractionLogs(prev, [{
+      id: `${groupKey}-${timestamp}-${slug()}`,
+      loanId: primaryRecord.loanId,
+      userId: primaryRecord.userId,
+      customerName: primaryRecord.customerName,
+      callStatus: primaryRecord.callStatus,
+      remark: primaryRecord.remark,
+      followUpDate: primaryRecord.followUpDate,
+      followUpTime: primaryRecord.followUpTime || "",
+      updatedAt: timestamp,
+      updatedBy: agent,
+    }]));
   }
 
   function beginFollowupEdit(group: FollowupGroup) {
@@ -4530,7 +4547,7 @@ function App() {
                                 "{selectedUserRecord.remark}"
                               </p>
                               <div className="text-[10px] text-slate-400 mt-2 font-medium">
-                                Last updated: {formatDate(selectedUserRecord.updatedAt)}
+                                Last updated: {formatDateTimeFromIso(selectedUserRecord.updatedAt)}
                               </div>
                             </div>
                           )}
@@ -4553,7 +4570,7 @@ function App() {
                                     <div className="space-y-1.5">
                                       <div className="flex items-center justify-between gap-2">
                                         <span className="text-[10px] font-bold text-slate-700">{entry.addedBy || "Agent"}</span>
-                                        <span className="text-[9px] text-slate-400">{formatDate(entry.timestamp)}</span>
+                                        <span className="text-[9px] text-slate-400">{formatDateTimeFromIso(entry.timestamp)}</span>
                                       </div>
                                       {entry.partialPaymentAmount && (
                                         <div className="flex items-center gap-2 text-xs bg-amber-50 border border-amber-100 rounded-xl px-2.5 py-1.5">
@@ -4616,7 +4633,7 @@ function App() {
                                           <div className="flex items-center gap-2">
                                             <span className="font-bold text-slate-800">{log.updatedBy || "Agent"}</span>
                                             <span className="text-slate-400">•</span>
-                                            <span className="text-slate-500 font-medium">{formatDate(log.updatedAt)}</span>
+                                            <span className="text-slate-500 font-medium">{formatDateTimeFromIso(log.updatedAt)}</span>
                                           </div>
                                           <StatusPill value={log.callStatus} />
                                         </div>

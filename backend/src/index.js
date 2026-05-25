@@ -524,7 +524,8 @@ app.post('/api/state', async (req, res) => {
       ['history', JSON.stringify(history)],
     );
 
-    // 2. Fetch existing database interaction logs to merge system-dispatched ones
+    // 2. Fetch existing database interaction logs and merge them with client logs.
+    // This prevents older agent remarks from being replaced by a stale browser payload.
     const existingLogsResult = await query(
       "SELECT payload FROM app_state WHERE state_key = 'interaction_logs'"
     );
@@ -533,13 +534,9 @@ app.post('/api/state', async (req, res) => {
     const mergedLogs = [...interaction_logs];
     for (const extLog of existingLogs) {
       if (!extLog) continue;
-      const updatedBy = extLog.updatedBy || "";
-      const remark = extLog.remark || "";
-      if (updatedBy === "System (Telegram Alert)" || remark.includes("🔔") || remark.includes("Telegram Alert")) {
-        const alreadyExists = mergedLogs.some(log => log && log.id === extLog.id);
-        if (!alreadyExists) {
-          mergedLogs.push(extLog);
-        }
+      const alreadyExists = mergedLogs.some(log => log && log.id === extLog.id);
+      if (!alreadyExists) {
+        mergedLogs.push(extLog);
       }
     }
 
