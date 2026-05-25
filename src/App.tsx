@@ -1806,11 +1806,6 @@ function App() {
               updatedAt: archiveTimestamp,
               pendingAmount: rec.pendingAmount ?? rec.defaultAmount,
             };
-              followUpDate: "",
-              followUpTime: "",
-              reminderEnabled: false,
-              updatedAt: archiveTimestamp,
-            };
             nextByLoanId.set(key, archivedRec);
             archived += 1;
 
