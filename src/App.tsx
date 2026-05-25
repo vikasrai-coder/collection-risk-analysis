@@ -1431,8 +1431,14 @@ function App() {
 
   const selectedUserLogs = useMemo(() => {
     if (!selectedUserId) return [];
+    const timelineMinute = (value: string) => {
+      const date = new Date(value || "");
+      if (Number.isNaN(date.getTime())) return value || "";
+      date.setSeconds(0, 0);
+      return date.toISOString();
+    };
     const logTimelineKey = (log: Pick<InteractionHistoryItem, "userId" | "updatedAt" | "remark" | "updatedBy">) =>
-      `${log.userId}|${log.updatedAt}|${normalizedText(log.remark || "")}|${log.updatedBy || ""}`;
+      `${log.userId}|${timelineMinute(log.updatedAt)}|${normalizedText(log.remark || "").toLowerCase()}|${log.updatedBy || ""}`;
     const logs: InteractionHistoryItem[] = [];
     const existingLogKeys = new Set<string>();
     interactionLogs
@@ -1447,7 +1453,7 @@ function App() {
     const selectedRecords = records.filter((r) => r.userId === selectedUserId || r.loanId === selectedUserId);
     selectedRecords.forEach((record) => {
       (record.remarkHistory || []).forEach((entry) => {
-        const key = `${record.userId}|${entry.timestamp}|${normalizedText(entry.text || "")}|${entry.addedBy || record.updatedBy || "Agent"}`;
+        const key = `${record.userId}|${timelineMinute(entry.timestamp)}|${normalizedText(entry.text || "").toLowerCase()}|${entry.addedBy || record.updatedBy || "Agent"}`;
         if (existingLogKeys.has(key)) return;
         existingLogKeys.add(key);
         logs.push({
@@ -1470,7 +1476,7 @@ function App() {
     if (selectedUserRecord && (selectedUserRecord.remark || selectedUserRecord.callStatus)) {
       const hasInitialLog = logs.some(log => log.id === `initial-sheet-remark-${selectedUserRecord.id}`);
       const hasSameCurrentRemark = selectedUserRecord.remark
-        ? existingLogKeys.has(`${selectedUserRecord.userId}|${selectedUserRecord.updatedAt}|${normalizedText(selectedUserRecord.remark)}|${(selectedUserRecord as any).updatedBy || user?.email || "System Import"}`)
+        ? existingLogKeys.has(`${selectedUserRecord.userId}|${timelineMinute(selectedUserRecord.updatedAt)}|${normalizedText(selectedUserRecord.remark).toLowerCase()}|${(selectedUserRecord as any).updatedBy || user?.email || "System Import"}`)
         : false;
       if (!hasInitialLog && !hasSameCurrentRemark) {
         logs.push({
