@@ -31,6 +31,16 @@ import {
 
 type Page = "dashboard" | "followup" | "records" | "upload" | "users" | "reminders";
 
+type RemarkEntry = {
+  id: string;
+  text: string;
+  timestamp: string;
+  addedBy: string;
+  invoiceNumber?: string;
+  partialPaymentAmount?: number;
+  remainingAmount?: number;
+};
+
 type CollectionRecord = {
   id: string;
   userId: string;
@@ -49,10 +59,14 @@ type CollectionRecord = {
   paymentProbability: number;
   callStatus: string;
   remark: string;
+  remarkHistory?: RemarkEntry[];
+  partialPaymentSettled?: number;
+  pendingAmount?: number;
   followUpDate: string;
   followUpTime?: string;
   reminderEnabled: boolean;
   updatedAt: string;
+  updatedBy?: string;
   manuallyEditedFields?: string[];
 };
 
@@ -101,6 +115,8 @@ type Draft = {
   followUpDate: string;
   followUpTime?: string;
   reminderEnabled: boolean;
+  partialPaymentAmount?: number;
+  invoiceNumber?: string;
 };
 
 type FollowupGroup = {
@@ -185,6 +201,9 @@ const seedRecords: CollectionRecord[] = [
     followUpDate: "2026-05-18",
     reminderEnabled: true,
     updatedAt: "",
+    pendingAmount: 32000,
+    partialPaymentSettled: 0,
+    remarkHistory: [],
   },
   {
     id: "seed-2",
@@ -207,6 +226,9 @@ const seedRecords: CollectionRecord[] = [
     followUpDate: "2026-05-19",
     reminderEnabled: true,
     updatedAt: "",
+    pendingAmount: 54000,
+    partialPaymentSettled: 0,
+    remarkHistory: [],
   },
   {
     id: "seed-3",
@@ -229,6 +251,9 @@ const seedRecords: CollectionRecord[] = [
     followUpDate: "",
     reminderEnabled: false,
     updatedAt: "",
+    pendingAmount: 18000,
+    partialPaymentSettled: 0,
+    remarkHistory: [],
   },
 ];
 
@@ -422,8 +447,15 @@ function cleanupAndResetStaleRecords(records: CollectionRecord[]): CollectionRec
       }
     }
 
-    // Copy record to update it
-    const updatedRec = reminderPassed ? { ...rec, reminderEnabled: false } : rec;
+    // Copy record to update it, ensuring new fields are initialized
+    const updatedRec = {
+      ...rec,
+      reminderEnabled: reminderPassed ? false : rec.reminderEnabled,
+      pendingAmount: rec.pendingAmount ?? rec.defaultAmount,
+      partialPaymentSettled: rec.partialPaymentSettled ?? 0,
+      remarkHistory: rec.remarkHistory ?? [],
+      updatedBy: rec.updatedBy,
+    };
 
     return updatedRec;
   });
@@ -550,6 +582,56 @@ async function pushBackendState(
 
 function isLocked(record: CollectionRecord) {
   return record.callStatus === "Payment Done";
+}
+
+function appendRemarkToHistory(
+  record: CollectionRecord,
+  newRemark: string,
+  callStatus: string,
+  addedBy: string,
+  invoiceNumber?: string,
+  partialPaymentAmount?: number
+): { updatedRecord: CollectionRecord; remarkEntry: RemarkEntry } {
+  const timestamp = new Date().toISOString();
+  const remarkId = Math.random().toString(36).substring(2, 9);
+
+  // Calculate remaining amount if partial payment
+  const currentPending = record.pendingAmount ?? record.defaultAmount;
+  const remainingAmount = partialPaymentAmount ? currentPending - partialPaymentAmount : undefined;
+
+  // Format partial payment remark with invoice number and amount
+  let formattedRemark = newRemark;
+  if (callStatus === "Partial Payment" && partialPaymentAmount) {
+    const invoiceStr = invoiceNumber ? ` [Invoice: ${invoiceNumber}]` : "";
+    formattedRemark = `Partial Payment: ₹${partialPaymentAmount.toLocaleString("en-IN")}${invoiceStr} | Pending: ₹${(remainingAmount || 0).toLocaleString("en-IN")}. ${newRemark}`;
+  }
+
+  const remarkEntry: RemarkEntry = {
+    id: remarkId,
+    text: formattedRemark,
+    timestamp,
+    addedBy,
+    invoiceNumber,
+    partialPaymentAmount,
+    remainingAmount,
+  };
+
+  const remarkHistory = [...(record.remarkHistory || []), remarkEntry];
+
+  const updatedRecord: CollectionRecord = {
+    ...record,
+    remark: formattedRemark,
+    remarkHistory,
+    callStatus,
+    updatedAt: timestamp,
+    updatedBy: addedBy,
+    partialPaymentSettled: partialPaymentAmount
+      ? (record.partialPaymentSettled || 0) + partialPaymentAmount
+      : record.partialPaymentSettled,
+    pendingAmount: remainingAmount ?? record.pendingAmount,
+  };
+
+  return { updatedRecord, remarkEntry };
 }
 
 function mergeInteractionLogs(prev: InteractionHistoryItem[], newLogs: InteractionHistoryItem[]): InteractionHistoryItem[] {
@@ -1620,10 +1702,13 @@ function App() {
               callStatus: existing.callStatus || csvCallStatus || "Pending",
               // IMPORTANT: always preserve the agent's remark; never reset it from the sheet
               remark: existing.remark,
+              remarkHistory: existing.remarkHistory,
               followUpDate: existing.followUpDate || csvFollowUpDate || "",
               reminderEnabled: existing.reminderEnabled ?? !!csvFollowUpDate,
               // Preserve the existing updatedAt so the record is NOT seen as "updated today" by the daily followup view
               updatedAt: existing.updatedAt,
+              pendingAmount: existing.pendingAmount ?? existing.defaultAmount,
+              partialPaymentSettled: existing.partialPaymentSettled,
             };
             
             nextByLoanId.set(loanId, updatedRec);
@@ -1671,6 +1756,9 @@ function App() {
               followUpDate: finalFollowUpDate,
               reminderEnabled: !!finalFollowUpDate,
               updatedAt: timestamp,
+              pendingAmount: defaultAmount,
+              partialPaymentSettled: 0,
+              remarkHistory: [],
             };
             nextByLoanId.set(loanId, newRec);
             created += 1;
@@ -1712,6 +1800,12 @@ function App() {
               remark: rec.remark
                 ? `${rec.remark} | Auto-Archived: not in daily upload`
                 : "Payment Done (Auto-Archived)",
+              followUpDate: "",
+              followUpTime: "",
+              reminderEnabled: false,
+              updatedAt: archiveTimestamp,
+              pendingAmount: rec.pendingAmount ?? rec.defaultAmount,
+            };
               followUpDate: "",
               followUpTime: "",
               reminderEnabled: false,
@@ -1893,22 +1987,48 @@ function App() {
         if (draft.alternateNumber !== record.alternateNumber && !editedFields.includes("alternateNumber")) editedFields.push("alternateNumber");
         if (draft.anchor !== record.anchor && !editedFields.includes("anchor")) editedFields.push("anchor");
 
-        updatedRecord = {
-          ...record,
-          customerName: draft.customerName,
-          lender: draft.lender || record.lender,
-          mobile: draft.mobile,
-          alternateNumber: draft.alternateNumber,
-          anchor: draft.anchor,
-          callStatus: draft.callStatus,
-          remark: paymentDone ? "Payment Done" : draft.remark,
-          followUpDate: paymentDone ? "" : draft.followUpDate,
-          followUpTime: paymentDone ? "" : draft.followUpTime || "",
-          reminderEnabled: paymentDone ? false : draft.reminderEnabled,
-          updatedAt: new Date().toISOString(),
-          updatedBy: user?.email || "Agent",
-          manuallyEditedFields: editedFields,
-        } as any;
+        // Handle remark with history
+        const newRemark = paymentDone ? "Payment Done" : draft.remark;
+        const hasNewRemark = newRemark && newRemark !== record.remark;
+        
+        let finalRecord: CollectionRecord;
+        if (hasNewRemark) {
+          const { updatedRecord: recordWithHistory } = appendRemarkToHistory(
+            {
+              ...record,
+              customerName: draft.customerName,
+              lender: draft.lender || record.lender,
+              mobile: draft.mobile,
+              alternateNumber: draft.alternateNumber,
+              anchor: draft.anchor,
+              manuallyEditedFields: editedFields,
+            },
+            newRemark,
+            draft.callStatus,
+            user?.email || "Agent",
+            draft.invoiceNumber,
+            draft.partialPaymentAmount
+          );
+          finalRecord = recordWithHistory;
+        } else {
+          finalRecord = {
+            ...record,
+            customerName: draft.customerName,
+            lender: draft.lender || record.lender,
+            mobile: draft.mobile,
+            alternateNumber: draft.alternateNumber,
+            anchor: draft.anchor,
+            callStatus: draft.callStatus,
+            followUpDate: paymentDone ? "" : draft.followUpDate,
+            followUpTime: paymentDone ? "" : draft.followUpTime || "",
+            reminderEnabled: paymentDone ? false : draft.reminderEnabled,
+            updatedAt: new Date().toISOString(),
+            updatedBy: user?.email || "Agent",
+            manuallyEditedFields: editedFields,
+          };
+        }
+
+        updatedRecord = finalRecord;
         return updatedRecord;
       }),
     );
@@ -1954,22 +2074,46 @@ function App() {
         if (draft.alternateNumber !== record.alternateNumber && !editedFields.includes("alternateNumber")) editedFields.push("alternateNumber");
         if (draft.anchor !== record.anchor && !editedFields.includes("anchor")) editedFields.push("anchor");
 
-        const updated = {
-          ...record,
-          customerName: draft.customerName,
-          lender: draft.lender || record.lender,
-          mobile: draft.mobile,
-          alternateNumber: draft.alternateNumber,
-          anchor: draft.anchor,
-          callStatus: draft.callStatus,
-          remark: paymentDone ? "Payment Done" : draft.remark,
-          followUpDate: paymentDone ? "" : draft.followUpDate,
-          followUpTime: paymentDone ? "" : draft.followUpTime || "",
-          reminderEnabled: paymentDone ? false : !!draft.reminderEnabled,
-          updatedAt: timestamp,
-          updatedBy: user?.email || "Agent",
-          manuallyEditedFields: editedFields,
-        };
+        // Handle remark with history
+        const newRemark = paymentDone ? "Payment Done" : draft.remark;
+        const hasNewRemark = newRemark && newRemark !== record.remark;
+
+        let updated: CollectionRecord;
+        if (hasNewRemark) {
+          const { updatedRecord: recordWithHistory } = appendRemarkToHistory(
+            {
+              ...record,
+              customerName: draft.customerName,
+              lender: draft.lender || record.lender,
+              mobile: draft.mobile,
+              alternateNumber: draft.alternateNumber,
+              anchor: draft.anchor,
+              manuallyEditedFields: editedFields,
+            },
+            newRemark,
+            draft.callStatus,
+            user?.email || "Agent",
+            draft.invoiceNumber,
+            draft.partialPaymentAmount
+          );
+          updated = recordWithHistory;
+        } else {
+          updated = {
+            ...record,
+            customerName: draft.customerName,
+            lender: draft.lender || record.lender,
+            mobile: draft.mobile,
+            alternateNumber: draft.alternateNumber,
+            anchor: draft.anchor,
+            callStatus: draft.callStatus,
+            followUpDate: paymentDone ? "" : draft.followUpDate,
+            followUpTime: paymentDone ? "" : draft.followUpTime || "",
+            reminderEnabled: paymentDone ? false : !!draft.reminderEnabled,
+            updatedAt: timestamp,
+            updatedBy: user?.email || "Agent",
+            manuallyEditedFields: editedFields,
+          };
+        }
 
         newLogs.push({
           id: Math.random().toString(36).substring(2, 9),
@@ -3313,6 +3457,34 @@ function App() {
                                 />
                               </div>
 
+                              {/* Partial Payment Fields */}
+                              {draft.callStatus === "Partial Payment" && (
+                                <div className="grid grid-cols-2 gap-3 bg-amber-50/30 border border-amber-200/40 rounded-xl p-3">
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">Invoice Number</label>
+                                    <input
+                                      type="text"
+                                      value={draft.invoiceNumber || ""}
+                                      disabled={locked}
+                                      onChange={(event) => updateFollowupDraft(group, { invoiceNumber: event.target.value })}
+                                      className="h-10 w-full rounded-xl border border-amber-200 bg-white px-3 text-xs outline-none focus:border-amber-400 focus:bg-amber-50/50 transition disabled:bg-slate-100"
+                                      placeholder="Invoice #"
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">Amount Paid (₹)</label>
+                                    <input
+                                      type="number"
+                                      value={draft.partialPaymentAmount || ""}
+                                      disabled={locked}
+                                      onChange={(event) => updateFollowupDraft(group, { partialPaymentAmount: event.target.value ? Number(event.target.value) : undefined })}
+                                      className="h-10 w-full rounded-xl border border-amber-200 bg-white px-3 text-xs outline-none focus:border-amber-400 focus:bg-amber-50/50 transition disabled:bg-slate-100"
+                                      placeholder="Amount"
+                                    />
+                                  </div>
+                                </div>
+                              )}
+
                               {/* Side-by-Side Date and Time Picker */}
                               <div className="grid grid-cols-2 gap-3">
                                 <div className="space-y-1">
@@ -4364,6 +4536,41 @@ function App() {
                               </p>
                               <div className="text-[10px] text-slate-400 mt-2 font-medium">
                                 Last updated: {formatDate(selectedUserRecord.updatedAt)}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Remark History Timeline */}
+                          {selectedUserRecord?.remarkHistory && selectedUserRecord.remarkHistory.length > 0 && (
+                            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+                              <div className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2">
+                                <History className="h-4 w-4" />
+                                Remark History Timeline
+                              </div>
+                              <div className="relative border-l-2 border-slate-200 pl-4 ml-2 space-y-4">
+                                {selectedUserRecord.remarkHistory.map((entry, idx) => (
+                                  <div key={entry.id} className="relative">
+                                    <span className={`absolute -left-[25px] top-2 h-3.5 w-3.5 rounded-full ${
+                                      idx === selectedUserRecord.remarkHistory!.length - 1
+                                        ? "bg-emerald-500"
+                                        : "bg-slate-300"
+                                    } ring-2 ring-white`} />
+                                    <div className="space-y-1.5">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="text-[10px] font-bold text-slate-700">{entry.addedBy || "Agent"}</span>
+                                        <span className="text-[9px] text-slate-400">{formatDate(entry.timestamp)}</span>
+                                      </div>
+                                      {entry.partialPaymentAmount && (
+                                        <div className="flex items-center gap-2 text-xs bg-amber-50 border border-amber-100 rounded-xl px-2.5 py-1.5">
+                                          <span className="font-bold text-amber-800">Partial: ₹{entry.partialPaymentAmount.toLocaleString("en-IN")}</span>
+                                          {entry.invoiceNumber && <span className="text-amber-600">| Invoice: {entry.invoiceNumber}</span>}
+                                          {entry.remainingAmount !== undefined && <span className="text-amber-700 font-semibold">| Pending: ₹{entry.remainingAmount.toLocaleString("en-IN")}</span>}
+                                        </div>
+                                      )}
+                                      <p className="text-xs text-slate-600 leading-relaxed">{entry.text}</p>
+                                    </div>
+                                  </div>
+                                ))}
                               </div>
                             </div>
                           )}
