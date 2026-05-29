@@ -304,6 +304,7 @@ function normalizedText(value: string) {
 }
 
 function isAllowedLender(lender: string) {
+  if (!lender || !lender.trim()) return true;
   return lenderWhitelist.includes(normalizedText(lender));
 }
 
