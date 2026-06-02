@@ -141,6 +141,7 @@ type FollowupGroup = {
   updatedAt: string;
   pendingDays?: number;
   defaultDays?: number;
+  latestCollectionDate?: string;
 };
 
 const STORAGE_KEY = "collection-risk-records-v1";
@@ -1622,10 +1623,13 @@ function App() {
         existing.totalDefaultAmount += record.defaultAmount;
         existing.loanCount += 1;
         
-        // Track the maximum default age/pending days for this group
-        if (record.pendingDays !== undefined && (existing.pendingDays === undefined || record.pendingDays > existing.pendingDays)) {
-          existing.pendingDays = record.pendingDays;
-          existing.defaultDays = record.defaultDays;
+        // Track the latest collection date and its corresponding pending days
+        if (record.collectionDate) {
+          if (!existing.latestCollectionDate || record.collectionDate > existing.latestCollectionDate) {
+            existing.latestCollectionDate = record.collectionDate;
+            existing.pendingDays = record.pendingDays;
+            existing.defaultDays = record.defaultDays;
+          }
         }
 
         // Accumulate unique remarks if updated today
@@ -1677,6 +1681,7 @@ function App() {
           updatedAt: record.updatedAt,
           pendingDays: record.pendingDays,
           defaultDays: record.defaultDays,
+          latestCollectionDate: record.collectionDate,
         });
       }
     }
@@ -3122,11 +3127,12 @@ function App() {
                     <table className="min-w-full text-sm">
                       <thead className="text-left text-slate-500">
                         <tr>
-                          <th className="pb-3 font-medium">User</th>
+                           <th className="pb-3 font-medium">User</th>
                           <th className="pb-3 font-medium">Customer</th>
                           <th className="pb-3 font-medium">Lender</th>
                           <th className="pb-3 font-medium">Anchor</th>
                           <th className="pb-3 font-medium">Contact</th>
+                          <th className="pb-3 font-medium">Days</th>
                           <th className="pb-3 font-medium">Amount</th>
                           <th className="pb-3 font-medium">Remarks</th>
                           <th className="pb-3 font-medium">Follow-up</th>
@@ -3274,12 +3280,17 @@ function App() {
                                 )}
                               </td>
                               <td className="py-3">
-                                <div className="font-semibold">{formatCurrency(group.totalDefaultAmount)}</div>
-                                {group.pendingDays !== undefined && group.pendingDays > 0 && (
-                                  <div className="text-xs text-rose-600 font-semibold whitespace-nowrap mt-0.5">
-                                    {group.pendingDays} days pending
-                                  </div>
+                                {group.pendingDays !== undefined && group.pendingDays > 0 ? (
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 border border-rose-100 text-rose-700">
+                                    <Clock3 className="h-3.5 w-3.5 text-rose-600 animate-pulse" />
+                                    <span>{group.pendingDays} days</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 font-medium text-xs">0 days</span>
                                 )}
+                              </td>
+                              <td className="py-3">
+                                <div className="font-semibold">{formatCurrency(group.totalDefaultAmount)}</div>
                                 <div className="text-xs text-slate-500">
                                   {formatCurrency(group.totalLoanAmount)} / {group.loanCount} loans
                                 </div>
