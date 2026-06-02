@@ -23,29 +23,84 @@ export async function ensureSchema() {
       if (needsMigration) {
         console.log('[Auto-Migration] Found records without pendingDays. Triggering self-healing migration...');
         
-        // Inline calculatePendingDays function to remain self-contained
+        // Inline parseCollectionDate & calculatePendingDays functions to remain self-contained
+        const parseCollectionDate = (collectionDateStr) => {
+          if (!collectionDateStr) return null;
+          try {
+            const cleanStr = String(collectionDateStr).trim();
+            const numbers = cleanStr.match(/\d+/g);
+            if (numbers && numbers.length >= 3) {
+              let year = 0, month = 0, day = 0;
+              const val0 = parseInt(numbers[0], 10);
+              const val1 = parseInt(numbers[1], 10);
+              const val2 = parseInt(numbers[2], 10);
+
+              if (val0 > 1000) {
+                year = val0;
+                month = val1 - 1;
+                day = val2;
+              } else if (val2 > 1000) {
+                year = val2;
+                if (val0 > 12) {
+                  day = val0;
+                  month = val1 - 1;
+                } else if (val1 > 12) {
+                  day = val1;
+                  month = val0 - 1;
+                } else {
+                  day = val0;
+                  month = val1 - 1;
+                }
+              } else {
+                if (val0 > 50) {
+                  year = 1900 + val0;
+                  month = val1 - 1;
+                  day = val2;
+                } else if (val2 < 100) {
+                  year = 2000 + val2;
+                  day = val0;
+                  month = val1 - 1;
+                }
+              }
+
+              if (year > 0 && month >= 0 && month < 12 && day > 0 && day <= 31) {
+                return new Date(Date.UTC(year, month, day));
+              }
+            }
+
+            const fallback = new Date(cleanStr);
+            if (!isNaN(fallback.getTime())) {
+              return new Date(Date.UTC(fallback.getFullYear(), fallback.getMonth(), fallback.getDate()));
+            }
+          } catch (e) {}
+          return null;
+        };
+
         const calculateDays = (collectionDateStr) => {
           if (!collectionDateStr) return 0;
+          const recordDate = parseCollectionDate(collectionDateStr);
+          if (!recordDate) return 0;
+
           try {
-            const dateStr = collectionDateStr.substring(0, 10);
-            const parts = dateStr.split('-');
-            if (parts.length !== 3) return 0;
-            const year = parseInt(parts[0], 10);
-            const month = parseInt(parts[1], 10) - 1;
-            const day = parseInt(parts[2], 10);
-            if (isNaN(year) || isNaN(month) || isNaN(day)) return 0;
-            
-            const recordDate = new Date(Date.UTC(year, month, day));
-            const options = { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" };
-            const formatter = new Intl.DateTimeFormat("en-US", options);
-            const dateParts = formatter.formatToParts(new Date());
-            const partMap = {};
-            for (const part of dateParts) {
-              partMap[part.type] = part.value;
+            let todayStr;
+            try {
+              todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
+            } catch (e) {
+              todayStr = new Date().toLocaleDateString('en-US');
             }
-            const todayYear = parseInt(partMap.year, 10);
-            const todayMonth = parseInt(partMap.month, 10) - 1;
-            const todayDay = parseInt(partMap.day, 10);
+            const numbers = todayStr.match(/\d+/g);
+            let todayYear, todayMonth, todayDay;
+            if (numbers && numbers.length >= 3) {
+              todayMonth = parseInt(numbers[0], 10) - 1;
+              todayDay = parseInt(numbers[1], 10);
+              todayYear = parseInt(numbers[2], 10);
+            } else {
+              const d = new Date();
+              todayYear = d.getFullYear();
+              todayMonth = d.getMonth();
+              todayDay = d.getDate();
+            }
+
             const todayDate = new Date(Date.UTC(todayYear, todayMonth, todayDay));
             const diffTime = todayDate.getTime() - recordDate.getTime();
             const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
