@@ -20,6 +20,51 @@ app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 app.use(morgan('dev'));
 
+// Helper to calculate payment pending days since collectionDate (in IST)
+function calculatePendingDays(collectionDateStr) {
+  if (!collectionDateStr) return 0;
+  try {
+    const dateStr = collectionDateStr.substring(0, 10);
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) return 0;
+    
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1; // 0-indexed month
+    const day = parseInt(parts[2], 10);
+    
+    if (isNaN(year) || isNaN(month) || isNaN(day)) return 0;
+    
+    const recordDate = new Date(Date.UTC(year, month, day));
+    
+    const options = {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    };
+    const formatter = new Intl.DateTimeFormat("en-US", options);
+    const dateParts = formatter.formatToParts(new Date());
+    
+    const partMap = {};
+    for (const part of dateParts) {
+      partMap[part.type] = part.value;
+    }
+    
+    const todayYear = parseInt(partMap.year, 10);
+    const todayMonth = parseInt(partMap.month, 10) - 1;
+    const todayDay = parseInt(partMap.day, 10);
+    
+    const todayDate = new Date(Date.UTC(todayYear, todayMonth, todayDay));
+    
+    const diffTime = todayDate.getTime() - recordDate.getTime();
+    const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+    
+    return diffDays > 0 ? diffDays : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
 // Helper to clean up passed reminders and reset yesterday's follow-ups in IST
 function cleanupAndResetStaleRecords(records) {
   if (!Array.isArray(records)) return [];
@@ -58,8 +103,19 @@ function cleanupAndResetStaleRecords(records) {
       }
     }
 
+    // 2. Calculate pending days (only for active defaults)
+    const isResolved =
+      rec.callStatus === "Payment Done" ||
+      rec.status === "Closed" ||
+      rec.status === "Payment Clear";
+    const pDays = isResolved ? 0 : calculatePendingDays(rec.collectionDate);
+
     // Copy record to update it
-    let updatedRec = { ...rec };
+    let updatedRec = { 
+      ...rec,
+      pendingDays: pDays,
+      defaultDays: pDays
+    };
 
     if (reminderPassed) {
       // If reminder has passed, disable it so it won't show/alert anymore

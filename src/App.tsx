@@ -68,6 +68,8 @@ type CollectionRecord = {
   updatedAt: string;
   updatedBy?: string;
   manuallyEditedFields?: string[];
+  pendingDays?: number;
+  defaultDays?: number;
 };
 
 type UploadHistory = {
@@ -137,6 +139,8 @@ type FollowupGroup = {
   totalDefaultAmount: number;
   loanCount: number;
   updatedAt: string;
+  pendingDays?: number;
+  defaultDays?: number;
 };
 
 const STORAGE_KEY = "collection-risk-records-v1";
@@ -420,6 +424,50 @@ function computeRiskScore(loanAmount: number, defaultAmount: number, status: str
   return Math.max(5, Math.min(95, score));
 }
 
+function calculatePendingDays(collectionDateStr: string | undefined | null): number {
+  if (!collectionDateStr) return 0;
+  try {
+    const dateStr = collectionDateStr.substring(0, 10);
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) return 0;
+    
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1; // 0-indexed month
+    const day = parseInt(parts[2], 10);
+    
+    if (isNaN(year) || isNaN(month) || isNaN(day)) return 0;
+    
+    const recordDate = new Date(Date.UTC(year, month, day));
+    
+    const options = {
+      timeZone: "Asia/Kolkata",
+      year: "numeric" as const,
+      month: "2-digit" as const,
+      day: "2-digit" as const
+    };
+    const formatter = new Intl.DateTimeFormat("en-US", options);
+    const dateParts = formatter.formatToParts(new Date());
+    
+    const partMap: Record<string, string> = {};
+    for (const part of dateParts) {
+      partMap[part.type] = part.value;
+    }
+    
+    const todayYear = parseInt(partMap.year, 10);
+    const todayMonth = parseInt(partMap.month, 10) - 1;
+    const todayDay = parseInt(partMap.day, 10);
+    
+    const todayDate = new Date(Date.UTC(todayYear, todayMonth, todayDay));
+    
+    const diffTime = todayDate.getTime() - recordDate.getTime();
+    const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+    
+    return diffDays > 0 ? diffDays : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -461,6 +509,13 @@ function cleanupAndResetStaleRecords(records: CollectionRecord[]): CollectionRec
       }
     }
 
+    // 2. Calculate pending days (only for active defaults)
+    const isResolved =
+      rec.callStatus === "Payment Done" ||
+      rec.status === "Closed" ||
+      rec.status === "Payment Clear";
+    const pDays = isResolved ? 0 : calculatePendingDays(rec.collectionDate);
+
     // Copy record to update it, ensuring new fields are initialized
     const updatedRec = {
       ...rec,
@@ -469,6 +524,8 @@ function cleanupAndResetStaleRecords(records: CollectionRecord[]): CollectionRec
       partialPaymentSettled: rec.partialPaymentSettled ?? 0,
       remarkHistory: rec.remarkHistory ?? [],
       updatedBy: rec.updatedBy,
+      pendingDays: pDays,
+      defaultDays: pDays,
     };
 
     return updatedRec;
@@ -580,13 +637,14 @@ async function pushBackendState(
   interaction_logs: InteractionHistoryItem[],
   telegram_settings: TelegramSettings
 ) {
+  const finalRecords = cleanupAndResetStaleRecords(records);
   const response = await fetch(`${API_BASE_URL}/api/state`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...getAuthHeader()
     },
-    body: JSON.stringify({ records, history, interaction_logs: collapseSheetImportLogs(interaction_logs), telegram_settings }),
+    body: JSON.stringify({ records: finalRecords, history, interaction_logs: collapseSheetImportLogs(interaction_logs), telegram_settings }),
   });
 
   if (!response.ok) {
@@ -1564,6 +1622,12 @@ function App() {
         existing.totalDefaultAmount += record.defaultAmount;
         existing.loanCount += 1;
         
+        // Track the maximum default age/pending days for this group
+        if (record.pendingDays !== undefined && (existing.pendingDays === undefined || record.pendingDays > existing.pendingDays)) {
+          existing.pendingDays = record.pendingDays;
+          existing.defaultDays = record.defaultDays;
+        }
+
         // Accumulate unique remarks if updated today
         if (displayRemark) {
           const trimmedRemark = displayRemark.trim();
@@ -1611,6 +1675,8 @@ function App() {
           totalDefaultAmount: record.defaultAmount,
           loanCount: 1,
           updatedAt: record.updatedAt,
+          pendingDays: record.pendingDays,
+          defaultDays: record.defaultDays,
         });
       }
     }
@@ -3209,6 +3275,11 @@ function App() {
                               </td>
                               <td className="py-3">
                                 <div className="font-semibold">{formatCurrency(group.totalDefaultAmount)}</div>
+                                {group.pendingDays !== undefined && group.pendingDays > 0 && (
+                                  <div className="text-xs text-rose-600 font-semibold whitespace-nowrap mt-0.5">
+                                    {group.pendingDays} days pending
+                                  </div>
+                                )}
                                 <div className="text-xs text-slate-500">
                                   {formatCurrency(group.totalLoanAmount)} / {group.loanCount} loans
                                 </div>
@@ -3343,7 +3414,14 @@ function App() {
                               <div>
                                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block leading-none mb-1">Customer / ID</span>
                                 <div className="text-sm font-black text-slate-900 leading-tight">{group.customerName || "-"}</div>
-                                <div className="text-xs font-semibold text-slate-500">{group.userId}</div>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <div className="text-xs font-semibold text-slate-500">{group.userId}</div>
+                                  {group.pendingDays !== undefined && group.pendingDays > 0 && (
+                                    <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded-md whitespace-nowrap leading-none">
+                                      {group.pendingDays}d pending
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             </div>
                             {!editing && !followupEditMode ? (
@@ -3796,7 +3874,14 @@ function App() {
                             <td className="py-3">
                               <StatusPill value={record.callStatus || record.status || "Pending"} />
                             </td>
-                            <td className="py-3">{formatCurrency(record.defaultAmount)}</td>
+                            <td className="py-3">
+                              <div>{formatCurrency(record.defaultAmount)}</div>
+                              {record.pendingDays !== undefined && record.pendingDays > 0 && (
+                                <span className="inline-block text-[10px] font-bold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded-md mt-0.5 whitespace-nowrap">
+                                  {record.pendingDays} days
+                                </span>
+                              )}
+                            </td>
                             <td className="py-3">{record.riskScore}</td>
                           </tr>
                         ))}
@@ -4459,6 +4544,12 @@ function App() {
                                 <div className="text-2xl font-black text-rose-600 tracking-tight mt-0.5">
                                   {formatCurrency(selectedUserGroupData ? selectedUserGroupData.totalDefaultAmount : selectedUserRecord.defaultAmount)}
                                 </div>
+                                {selectedUserRecord.pendingDays !== undefined && selectedUserRecord.pendingDays > 0 && (
+                                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 border border-rose-100 text-rose-700 mt-1.5 mb-1">
+                                    <Clock3 className="h-3.5 w-3.5 text-rose-600 animate-pulse" />
+                                    <span>{selectedUserRecord.pendingDays} days in default</span>
+                                  </div>
+                                )}
                                 <div className="text-[10px] text-slate-500 mt-0.5">
                                   Total Loan: {selectedUserGroupData
                                     ? `${formatCurrency(selectedUserGroupData.totalLoanAmount)} / ${selectedUserGroupData.loanCount} ${selectedUserGroupData.loanCount === 1 ? 'loan' : 'loans'}`
@@ -4638,31 +4729,41 @@ function App() {
                               </div>
                             ) : (
                               <div className="relative mt-8 border-l-2 border-slate-200 pl-8 ml-3 space-y-8">
-                                {[...selectedUserRecord.remarkHistory]
-                                  .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-                                  .map((entry, idx) => (
-                                  <div key={entry.id} className="relative">
-                                    <span className={`absolute -left-[42px] top-1.5 h-5 w-5 rounded-full ${
-                                      idx === 0
-                                        ? "bg-emerald-500"
-                                        : "bg-slate-300"
-                                    } ring-4 ring-white`} />
-                                    <div className="space-y-3">
-                                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                                        <span className="text-sm font-bold text-slate-800">{entry.addedBy || "Agent"}</span>
-                                        <span className="text-sm font-medium text-slate-400">{formatDateTimeFromIso(entry.timestamp)}</span>
-                                      </div>
-                                      {entry.partialPaymentAmount && (
-                                        <div className="flex flex-wrap items-center gap-2 text-xs bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
-                                          <span className="font-bold text-amber-800">Partial: ₹{entry.partialPaymentAmount.toLocaleString("en-IN")}</span>
-                                          {entry.invoiceNumber && <span className="text-amber-600">| Invoice: {entry.invoiceNumber}</span>}
-                                          {entry.remainingAmount !== undefined && <span className="text-amber-700 font-semibold">| Pending: ₹{entry.remainingAmount.toLocaleString("en-IN")}</span>}
+                                {(() => {
+                                  const uniqueRemarks = Array.from(
+                                    new Map(
+                                      (selectedUserRecord.remarkHistory || []).map((entry) => [
+                                        `${entry.text}-${entry.addedBy}-${new Date(entry.timestamp).toISOString().slice(0, 16)}`,
+                                        entry
+                                      ])
+                                    ).values()
+                                  );
+                                  return uniqueRemarks
+                                    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                                    .map((entry, idx) => (
+                                      <div key={entry.id} className="relative">
+                                        <span className={`absolute -left-[42px] top-1.5 h-5 w-5 rounded-full ${
+                                          idx === 0
+                                            ? "bg-emerald-500"
+                                            : "bg-slate-300"
+                                        } ring-4 ring-white`} />
+                                        <div className="space-y-3">
+                                          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                            <span className="text-sm font-bold text-slate-800">{entry.addedBy || "Agent"}</span>
+                                            <span className="text-sm font-medium text-slate-400">{formatDateTimeFromIso(entry.timestamp)}</span>
+                                          </div>
+                                          {entry.partialPaymentAmount && (
+                                            <div className="flex flex-wrap items-center gap-2 text-xs bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+                                              <span className="font-bold text-amber-800">Partial: ₹{entry.partialPaymentAmount.toLocaleString("en-IN")}</span>
+                                              {entry.invoiceNumber && <span className="text-amber-600">| Invoice: {entry.invoiceNumber}</span>}
+                                              {entry.remainingAmount !== undefined && <span className="text-amber-700 font-semibold">| Pending: ₹{entry.remainingAmount.toLocaleString("en-IN")}</span>}
+                                            </div>
+                                          )}
+                                          <p className="text-base text-slate-600 leading-relaxed">{entry.text}</p>
                                         </div>
-                                      )}
-                                      <p className="text-base text-slate-600 leading-relaxed">{entry.text}</p>
-                                    </div>
-                                  </div>
-                                ))}
+                                      </div>
+                                    ));
+                                })()}
                               </div>
                             )}
                           </div>
