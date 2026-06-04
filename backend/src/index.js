@@ -926,21 +926,17 @@ async function checkAndSendTelegramReminders(force = false) {
 
     for (const userId of uniqueUserIds) {
       const group = groupedReminders[userId];
-      const invoiceCountLabel = group.recordsCount > 1 ? ` (${group.recordsCount} Invoices)` : '';
       const combinedRemark = group.remarks.length > 0 ? group.remarks.join(' | ') : 'N/A';
 
       const cleanPhone = group.mobile ? group.mobile.replace(/\D/g, '') : '';
-      const callUrl = cleanPhone.length === 10 ? `+91${cleanPhone}` : cleanPhone;
-      const contactLabel = group.mobile ? `[${group.mobile}](tel:${callUrl})` : 'N/A';
 
-      const msg = `🔔 *Collection Follow-up Alert*\n\n` +
+      const msg = `*Collection Follow-up Alert*\n\n` +
                   `👤 *Customer*: ${group.customerName}\n` +
                   `🆔 *User ID*: ${group.userId}\n` +
-                  `💰 *Total Default*: ₹${group.totalDefaultAmount.toLocaleString('en-IN')}${invoiceCountLabel}\n` +
-                  `📞 *Contact*: ${contactLabel}\n` +
+                  `💰 *Default Amount*: ₹${group.totalDefaultAmount.toLocaleString('en-IN')}\n` +
+                  `📞 *Contact*: ${group.mobile || 'N/A'}\n` +
                   `📅 *Follow-up Date*: ${group.followUpDate}\n` +
-                  `⏰ *Follow-up Time*: ${group.followUpTime}\n` +
-                  `📝 *Remarks*: ${combinedRemark}\n\n` +
+                  `📝 *Current Remark*: ${combinedRemark}\n\n` +
                   `⚠️ _Please contact this customer between active operational hours (10 AM to 6 PM)._`;
       
       // Build call & whatsapp inline keyboard buttons
