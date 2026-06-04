@@ -25,6 +25,15 @@ function parseCollectionDate(collectionDateStr) {
   if (!collectionDateStr) return null;
   try {
     const cleanStr = String(collectionDateStr).trim();
+
+    // Prioritize standard JS Date parsing for ISO, GMT, or alphabetic date formats
+    if (/[a-zA-Z]/.test(cleanStr) || cleanStr.includes('T')) {
+      const parsed = new Date(cleanStr);
+      if (!isNaN(parsed.getTime())) {
+        return new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()));
+      }
+    }
+
     const numbers = cleanStr.match(/\d+/g);
     if (numbers && numbers.length >= 3) {
       let year = 0, month = 0, day = 0;

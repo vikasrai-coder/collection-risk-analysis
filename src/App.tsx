@@ -429,6 +429,15 @@ function parseCollectionDate(collectionDateStr: string | undefined | null): Date
   if (!collectionDateStr) return null;
   try {
     const cleanStr = String(collectionDateStr).trim();
+
+    // Prioritize standard JS Date parsing for ISO, GMT, or alphabetic date formats
+    if (/[a-zA-Z]/.test(cleanStr) || cleanStr.includes('T')) {
+      const parsed = new Date(cleanStr);
+      if (!isNaN(parsed.getTime())) {
+        return new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()));
+      }
+    }
+
     const numbers = cleanStr.match(/\d+/g);
     if (numbers && numbers.length >= 3) {
       let year = 0, month = 0, day = 0;
@@ -2089,7 +2098,7 @@ function App() {
           }
         }
 
-        setRecords(restrictToAllowedLenders(Array.from(nextByLoanId.values())));
+        setRecords(cleanupAndResetStaleRecords(restrictToAllowedLenders(Array.from(nextByLoanId.values()))));
         if (newLogs.length) {
           setInteractionLogs((prev) => mergeInteractionLogs(prev, newLogs));
         }
@@ -4806,25 +4815,53 @@ function App() {
                               Remark History Timeline
                             </div>
 
-                            {!selectedUserRecord?.remarkHistory || selectedUserRecord.remarkHistory.length === 0 ? (
-                              <div className="flex flex-col items-center justify-center h-72 text-slate-400 text-center px-4">
-                                <div className="rounded-full bg-slate-50 p-4 border border-slate-100 text-slate-300">
-                                  <History className="h-8 w-8 stroke-1" />
-                                </div>
-                                <p className="mt-4 text-sm font-semibold text-slate-700">No remarks added yet</p>
-                              </div>
-                            ) : (
-                              <div className="relative mt-8 border-l-2 border-slate-200 pl-8 ml-3 space-y-8">
-                                {(() => {
-                                  const uniqueRemarks = Array.from(
-                                    new Map(
-                                      (selectedUserRecord.remarkHistory || []).map((entry) => [
-                                        `${entry.text}-${entry.addedBy}-${new Date(entry.timestamp).toISOString().slice(0, 16)}`,
-                                        entry
-                                      ])
-                                    ).values()
-                                  );
-                                  return uniqueRemarks
+                            {(() => {
+                              const logsForUser = interactionLogs.filter(
+                                (log) => log && (log.userId === selectedUserRecord.userId || log.loanId === selectedUserRecord.loanId)
+                              );
+
+                              // Convert matching interactionLogs to RemarkEntry objects
+                              const logsAsRemarks = logsForUser.map((log) => ({
+                                id: log.id,
+                                text: log.remark,
+                                timestamp: log.updatedAt,
+                                addedBy: log.updatedBy,
+                              }));
+
+                              // Merge existing remarkHistory with logsAsRemarks
+                              const combined = [
+                                ...(selectedUserRecord.remarkHistory || []),
+                                ...logsAsRemarks,
+                              ];
+
+                              // Filter out empty remarks
+                              const validRemarks = combined.filter((entry) => entry && entry.text && entry.text.trim());
+
+                              // Deduplicate by normalizing text, addedBy, and timestamp (rounded to minute)
+                              const uniqueRemarks = Array.from(
+                                new Map(
+                                  validRemarks.map((entry) => {
+                                    const dateStr = entry.timestamp ? new Date(entry.timestamp).toISOString().slice(0, 16) : "";
+                                    const key = `${entry.text.trim()}-${entry.addedBy || ""}-${dateStr}`;
+                                    return [key, entry];
+                                  })
+                                ).values()
+                              );
+
+                              if (uniqueRemarks.length === 0) {
+                                return (
+                                  <div className="flex flex-col items-center justify-center h-72 text-slate-400 text-center px-4">
+                                    <div className="rounded-full bg-slate-50 p-4 border border-slate-100 text-slate-300">
+                                      <History className="h-8 w-8 stroke-1" />
+                                    </div>
+                                    <p className="mt-4 text-sm font-semibold text-slate-700">No remarks added yet</p>
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div className="relative mt-8 border-l-2 border-slate-200 pl-8 ml-3 space-y-8">
+                                  {uniqueRemarks
                                     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
                                     .map((entry, idx) => (
                                       <div key={entry.id} className="relative">
@@ -4848,10 +4885,10 @@ function App() {
                                           <p className="text-base text-slate-600 leading-relaxed">{entry.text}</p>
                                         </div>
                                       </div>
-                                    ));
-                                })()}
-                              </div>
-                            )}
+                                    ))}
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
 
