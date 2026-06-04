@@ -622,7 +622,7 @@ app.post('/api/state', async (req, res) => {
     const sentReminders = sentResult.rows[0]?.payload || [];
 
     const finalRecords = cleanupAndResetStaleRecords(records).map(rec => {
-      const key = `${rec.id}-${rec.followUpDate || 'no-date'}-${rec.followUpTime || 'no-time'}`;
+      const key = `${rec.userId}-${rec.followUpDate || 'no-date'}-${rec.followUpTime || 'no-time'}`;
       if (sentReminders.includes(key)) {
         return { ...rec, reminderEnabled: false };
       }
@@ -868,8 +868,8 @@ async function checkAndSendTelegramReminders(force = false) {
       
       const isDateOrTimeEligible = isPastDate || (isTodayDate && isTimeEligible);
       
-      // Build unique key for this reminder based on ID, date, and time
-      const reminderKey = `${r.id}-${r.followUpDate || 'no-date'}-${r.followUpTime || 'no-time'}`;
+      // Build unique key for this reminder based on customer userId, date, and time
+      const reminderKey = `${r.userId}-${r.followUpDate || 'no-date'}-${r.followUpTime || 'no-time'}`;
       const isAlreadySent = sentReminders.includes(reminderKey);
       
       return r.reminderEnabled && isDateOrTimeEligible && r.callStatus !== 'Payment Done' && !isAlreadySent;
@@ -978,7 +978,7 @@ async function checkAndSendTelegramReminders(force = false) {
           }
 
           // Register sent reminder in persistent list to survive stale UI state overwrites
-          const reminderKey = `${origRec.id}-${origRec.followUpDate || 'no-date'}-${origRec.followUpTime || 'no-time'}`;
+          const reminderKey = `${origRec.userId}-${origRec.followUpDate || 'no-date'}-${origRec.followUpTime || 'no-time'}`;
           if (!sentReminders.includes(reminderKey)) {
             sentReminders.push(reminderKey);
           }

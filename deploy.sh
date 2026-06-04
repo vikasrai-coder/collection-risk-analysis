@@ -13,7 +13,7 @@ echo "📦 Staging current working tree modifications..."
 git add .
 
 # Prompt or use a default message
-COMMIT_MSG="fix: ensure follow-up date and reminder status are correctly saved when a remark is present"
+COMMIT_MSG="fix: group and track sent reminders by customer userId instead of invoice id"
 echo "💾 Committing changes with message: '$COMMIT_MSG'..."
 git commit -m "$COMMIT_MSG" || echo "⚠️ No modifications to commit"
 
