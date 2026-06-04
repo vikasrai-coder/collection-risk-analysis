@@ -160,19 +160,7 @@ function cleanupAndResetStaleRecords(records) {
   const currentTimeStr = `${partMap.hour}:${partMap.minute}`; // "HH:MM"
 
   return records.map(rec => {
-    // 1. Check if reminder has passed
-    let reminderPassed = false;
-    if (rec.followUpDate) {
-      if (rec.followUpDate < todayStr) {
-        reminderPassed = true;
-      } else if (rec.followUpDate === todayStr) {
-        if (rec.followUpTime && currentTimeStr >= rec.followUpTime) {
-          reminderPassed = true;
-        }
-      }
-    }
-
-    // 2. Calculate pending days (only for active defaults)
+    // Calculate pending days (only for active defaults)
     const isResolved =
       rec.callStatus === "Payment Done" ||
       rec.status === "Closed" ||
@@ -185,11 +173,6 @@ function cleanupAndResetStaleRecords(records) {
       pendingDays: pDays,
       defaultDays: pDays
     };
-
-    if (reminderPassed) {
-      // If reminder has passed, disable it so it won't show/alert anymore
-      updatedRec.reminderEnabled = false;
-    }
 
     return updatedRec;
   });
@@ -933,7 +916,7 @@ async function checkAndSendTelegramReminders(force = false) {
       const msg = `*Collection Follow-up Alert*\n\n` +
                   `👤 *Customer*: ${group.customerName}\n` +
                   `🆔 *User ID*: ${group.userId}\n` +
-                  `💰 *Default Amount*: ₹${group.totalDefaultAmount.toLocaleString('en-IN')}\n` +
+                  `💰 *Default Amount*: ₹${group.totalDefaultAmount.toLocaleString('en-IN')} / ${group.recordsCount} ${group.recordsCount === 1 ? 'loan' : 'loans'}\n` +
                   `📞 *Contact*: ${group.mobile || 'N/A'}\n` +
                   `📅 *Follow-up Date*: ${group.followUpDate}\n` +
                   `📝 *Current Remark*: ${combinedRemark}\n\n` +

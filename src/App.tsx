@@ -574,19 +574,7 @@ function cleanupAndResetStaleRecords(records: CollectionRecord[]): CollectionRec
   const currentTimeStr = `${partMap.hour}:${partMap.minute}`; // "HH:MM"
 
   return records.map(rec => {
-    // 1. Check if reminder has passed
-    let reminderPassed = false;
-    if (rec.followUpDate) {
-      if (rec.followUpDate < todayStr) {
-        reminderPassed = true;
-      } else if (rec.followUpDate === todayStr) {
-        if (rec.followUpTime && currentTimeStr >= rec.followUpTime) {
-          reminderPassed = true;
-        }
-      }
-    }
-
-    // 2. Calculate pending days (only for active defaults)
+    // Calculate pending days (only for active defaults)
     const isResolved =
       rec.callStatus === "Payment Done" ||
       rec.status === "Closed" ||
@@ -596,7 +584,6 @@ function cleanupAndResetStaleRecords(records: CollectionRecord[]): CollectionRec
     // Copy record to update it, ensuring new fields are initialized
     const updatedRec = {
       ...rec,
-      reminderEnabled: reminderPassed ? false : rec.reminderEnabled,
       pendingAmount: rec.pendingAmount ?? rec.defaultAmount,
       partialPaymentSettled: rec.partialPaymentSettled ?? 0,
       remarkHistory: rec.remarkHistory ?? [],

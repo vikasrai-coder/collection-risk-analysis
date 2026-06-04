@@ -13,7 +13,7 @@ echo "📦 Staging current working tree modifications..."
 git add .
 
 # Prompt or use a default message
-COMMIT_MSG="fix: update Telegram reminder message template formatting"
+COMMIT_MSG="fix: remove automatic deactivation of past reminders and show total loans in alert amount"
 echo "💾 Committing changes with message: '$COMMIT_MSG'..."
 git commit -m "$COMMIT_MSG" || echo "⚠️ No modifications to commit"
 
