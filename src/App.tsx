@@ -1387,9 +1387,10 @@ function App() {
     }
 
     const viewingCustomerId = selectedUserId || null;
-    const viewingCustomerName = selectedUserId && selectedUserRecord
-      ? selectedUserRecord.customerName
+    const activeRec = selectedUserId
+      ? records.find((r) => r.userId === selectedUserId || r.loanId === selectedUserId)
       : null;
+    const viewingCustomerName = activeRec ? activeRec.customerName : null;
 
     const sendHeartbeat = async () => {
       try {
@@ -1420,7 +1421,7 @@ function App() {
     sendHeartbeat();
     const intervalId = setInterval(sendHeartbeat, 15 * 1000);
     return () => clearInterval(intervalId);
-  }, [token, user, activePage, selectedUserId, selectedUserRecord]);
+  }, [token, user, activePage, selectedUserId, records]);
 
   const lenders = useMemo(
     () => ["All", ...new Set(records.map((record) => record.lender).filter(Boolean))],
