@@ -141,7 +141,7 @@ type FollowupGroup = {
   updatedAt: string;
   pendingDays?: number;
   defaultDays?: number;
-  latestCollectionDate?: string;
+  oldestCollectionDate?: string;
 };
 
 const STORAGE_KEY = "collection-risk-records-v1";
@@ -487,19 +487,31 @@ function calculatePendingDays(collectionDateStr: string | undefined | null): num
   if (!recordDate) return 0;
 
   try {
-    let todayStr;
+    let todayYear: number | undefined;
+    let todayMonth: number | undefined;
+    let todayDay: number | undefined;
+
     try {
-      todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric'
+      });
+      const parts = formatter.formatToParts(new Date());
+      const y = parts.find(p => p.type === 'year')?.value;
+      const m = parts.find(p => p.type === 'month')?.value;
+      const d = parts.find(p => p.type === 'day')?.value;
+      if (y && m && d) {
+        todayYear = parseInt(y, 10);
+        todayMonth = parseInt(m, 10) - 1;
+        todayDay = parseInt(d, 10);
+      }
     } catch (e) {
-      todayStr = new Date().toLocaleDateString('en-US');
+      // Fallback
     }
-    const numbers = todayStr.match(/\d+/g);
-    let todayYear, todayMonth, todayDay;
-    if (numbers && numbers.length >= 3) {
-      todayMonth = parseInt(numbers[0], 10) - 1;
-      todayDay = parseInt(numbers[1], 10);
-      todayYear = parseInt(numbers[2], 10);
-    } else {
+
+    if (todayYear === undefined || isNaN(todayYear) || todayMonth === undefined || isNaN(todayMonth) || todayDay === undefined || isNaN(todayDay)) {
       const d = new Date();
       todayYear = d.getFullYear();
       todayMonth = d.getMonth();
@@ -1669,10 +1681,10 @@ function App() {
         existing.totalDefaultAmount += record.defaultAmount;
         existing.loanCount += 1;
         
-        // Track the latest collection date and its corresponding pending days
+        // Track the oldest collection date and its corresponding pending days
         if (record.collectionDate) {
-          if (!existing.latestCollectionDate || record.collectionDate > existing.latestCollectionDate) {
-            existing.latestCollectionDate = record.collectionDate;
+          if (!existing.oldestCollectionDate || record.collectionDate < existing.oldestCollectionDate) {
+            existing.oldestCollectionDate = record.collectionDate;
             existing.pendingDays = record.pendingDays;
             existing.defaultDays = record.defaultDays;
           }
@@ -1727,7 +1739,7 @@ function App() {
           updatedAt: record.updatedAt,
           pendingDays: record.pendingDays,
           defaultDays: record.defaultDays,
-          latestCollectionDate: record.collectionDate,
+          oldestCollectionDate: record.collectionDate,
         });
       }
     }

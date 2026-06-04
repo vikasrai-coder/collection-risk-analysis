@@ -82,19 +82,31 @@ export async function ensureSchema() {
           if (!recordDate) return 0;
 
           try {
-            let todayStr;
+            let todayYear;
+            let todayMonth;
+            let todayDay;
+
             try {
-              todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
+              const formatter = new Intl.DateTimeFormat('en-US', {
+                timeZone: 'Asia/Kolkata',
+                year: 'numeric',
+                month: 'numeric',
+                day: 'numeric'
+              });
+              const parts = formatter.formatToParts(new Date());
+              const y = parts.find(p => p.type === 'year')?.value;
+              const m = parts.find(p => p.type === 'month')?.value;
+              const d = parts.find(p => p.type === 'day')?.value;
+              if (y && m && d) {
+                todayYear = parseInt(y, 10);
+                todayMonth = parseInt(m, 10) - 1;
+                todayDay = parseInt(d, 10);
+              }
             } catch (e) {
-              todayStr = new Date().toLocaleDateString('en-US');
+              // Fallback
             }
-            const numbers = todayStr.match(/\d+/g);
-            let todayYear, todayMonth, todayDay;
-            if (numbers && numbers.length >= 3) {
-              todayMonth = parseInt(numbers[0], 10) - 1;
-              todayDay = parseInt(numbers[1], 10);
-              todayYear = parseInt(numbers[2], 10);
-            } else {
+
+            if (todayYear === undefined || isNaN(todayYear) || todayMonth === undefined || isNaN(todayMonth) || todayDay === undefined || isNaN(todayDay)) {
               const d = new Date();
               todayYear = d.getFullYear();
               todayMonth = d.getMonth();
