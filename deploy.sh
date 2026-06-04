@@ -13,7 +13,7 @@ echo "📦 Staging current working tree modifications..."
 git add .
 
 # Prompt or use a default message
-COMMIT_MSG="fix: handle automatic session eviction on authentication failures to resolve presence sync"
+COMMIT_MSG="fix: ensure follow-up date and reminder status are correctly saved when a remark is present"
 echo "💾 Committing changes with message: '$COMMIT_MSG'..."
 git commit -m "$COMMIT_MSG" || echo "⚠️ No modifications to commit"
 

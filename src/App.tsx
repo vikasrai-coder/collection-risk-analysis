@@ -2389,6 +2389,10 @@ function App() {
       mobile: draft.mobile,
       alternateNumber: draft.alternateNumber,
       anchor: draft.anchor,
+      callStatus: draft.callStatus,
+      followUpDate: paymentDone ? "" : draft.followUpDate,
+      followUpTime: paymentDone ? "" : draft.followUpTime || "",
+      reminderEnabled: paymentDone ? false : !!draft.reminderEnabled,
       manuallyEditedFields: editedFields,
     };
     const newRemark = (paymentDone ? "Payment Done" : draft.remark).trim();
@@ -2403,10 +2407,6 @@ function App() {
         ).updatedRecord
       : {
           ...baseRecord,
-          callStatus: draft.callStatus,
-          followUpDate: paymentDone ? "" : draft.followUpDate,
-          followUpTime: paymentDone ? "" : draft.followUpTime || "",
-          reminderEnabled: paymentDone ? false : draft.reminderEnabled,
           updatedAt: new Date().toISOString(),
           updatedBy: user?.email || "Agent",
         };
@@ -2455,6 +2455,10 @@ function App() {
         mobile: draft.mobile,
         alternateNumber: draft.alternateNumber,
         anchor: draft.anchor,
+        callStatus: draft.callStatus,
+        followUpDate: paymentDone ? "" : draft.followUpDate,
+        followUpTime: paymentDone ? "" : draft.followUpTime || "",
+        reminderEnabled: paymentDone ? false : !!draft.reminderEnabled,
         manuallyEditedFields: editedFields,
       };
       const newRemark = (paymentDone ? "Payment Done" : draft.remark).trim();
@@ -2470,10 +2474,6 @@ function App() {
           ).updatedRecord
         : {
             ...baseRecord,
-            callStatus: draft.callStatus,
-            followUpDate: paymentDone ? "" : draft.followUpDate,
-            followUpTime: paymentDone ? "" : draft.followUpTime || "",
-            reminderEnabled: paymentDone ? false : !!draft.reminderEnabled,
             updatedAt: timestamp,
             updatedBy: agent,
           };
