@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import Papa from "papaparse";
 import {
   ActivitySquare,
@@ -915,7 +915,13 @@ function App() {
   const [mobileShowDashboardDetails, setMobileShowDashboardDetails] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showPaymentDoneList, setShowPaymentDoneList] = useState(false);
-  const [records, setRecords] = useState<CollectionRecord[]>([]);
+  const [records, setRecordsInternal] = useState<CollectionRecord[]>([]);
+  const setRecords = useCallback((next: CollectionRecord[] | ((prev: CollectionRecord[]) => CollectionRecord[])) => {
+    setRecordsInternal((prev) => {
+      const resolved = typeof next === "function" ? next(prev) : next;
+      return cleanupAndResetStaleRecords(resolved);
+    });
+  }, []);
   const [uploadHistory, setUploadHistory] = useState<UploadHistory[]>([]);
   const [search, setSearch] = useState("");
   const [lenderFilter, setLenderFilter] = useState("All");
