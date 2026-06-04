@@ -149,6 +149,7 @@ async function run() {
 
   // 2. Build uploadedLoanIds from CSV (if provided) ──────────
   const uploadedLoanIds = new Set();
+  const lendersInUpload = new Set();
 
   if (csvPath) {
     if (!fs.existsSync(csvPath)) {
@@ -164,7 +165,12 @@ async function run() {
       const lender = normalizedText(valueFromRow(row, ['lender', 'lenderName', 'nbfc']));
       if (!userId || !isAllowedLender(lender)) continue;
       const loanId = makeLoanKey(row);
-      if (loanId) uploadedLoanIds.add(loanId);
+      if (loanId) {
+        uploadedLoanIds.add(loanId);
+        if (lender) {
+          lendersInUpload.add(lender.toLowerCase().trim());
+        }
+      }
       validRows++;
     }
     console.log(`   Valid rows in CSV   : ${validRows}`);
@@ -182,6 +188,12 @@ async function run() {
     if (uploadedLoanIds.size > 0) {
       const key = getBaseLoanId(rec.loanId) || rec.id;
       if (uploadedLoanIds.has(key)) continue; // still in today's sheet
+
+      // Restrict auto-archiving to only records belonging to the lenders present in the uploaded sheet
+      if (lendersInUpload.size > 0) {
+        const recLenderLower = rec.lender ? rec.lender.toLowerCase().trim() : "";
+        if (!lendersInUpload.has(recLenderLower)) continue;
+      }
     }
 
     toArchive.push(rec);

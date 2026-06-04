@@ -13,7 +13,7 @@ echo "📦 Staging current working tree modifications..."
 git add .
 
 # Prompt or use a default message
-COMMIT_MSG="feat: implement IST-compliant payment pending days calculation, database JSONB persistence, and multi-viewport UI visualization"
+COMMIT_MSG="feat: implement lender-scoped auto-archiving on collection spreadsheet uploads"
 echo "💾 Committing changes with message: '$COMMIT_MSG'..."
 git commit -m "$COMMIT_MSG" || echo "⚠️ No modifications to commit"
 

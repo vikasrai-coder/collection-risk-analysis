@@ -1854,6 +1854,7 @@ function App() {
         };
         // Track every loanId actually present in this upload
         const uploadedLoanIds = new Set<string>();
+        const lendersInUpload = new Set<string>();
 
         for (const row of data) {
           const userId = valueFromRow(row, ["userId", "user_id", "customer_id", "customerId"]);
@@ -1867,6 +1868,9 @@ function App() {
 
           // Mark this loanId as present in today's upload
           uploadedLoanIds.add(loanId);
+          if (lender) {
+            lendersInUpload.add(lender.toLowerCase().trim());
+          }
 
           const customerName = normalizedText(valueFromRow(row, ["customerName", "customer", "name", "merchant", "merchantName"]));
           const anchor = normalizedText(valueFromRow(row, ["anchor", "anchorName", "anchorPerson"]));
@@ -2040,6 +2044,13 @@ function App() {
           const archiveTimestamp = new Date().toISOString();
           for (const [key, rec] of nextByLoanId) {
             if (uploadedLoanIds.has(key)) continue; // still active in today's upload
+
+            // Restrict auto-archiving to only records belonging to the lenders present in the uploaded sheet
+            if (lendersInUpload.size > 0) {
+              const recLenderLower = rec.lender ? rec.lender.toLowerCase().trim() : "";
+              if (!lendersInUpload.has(recLenderLower)) continue;
+            }
+
             // Skip already-resolved records
             if (
               rec.callStatus === "Payment Done" ||
