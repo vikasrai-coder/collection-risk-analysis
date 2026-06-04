@@ -702,6 +702,9 @@ async function fetchBackendState() {
   const response = await fetch(`${API_BASE_URL}/api/state`, {
     headers: getAuthHeader()
   });
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(`AUTH_ERROR_${response.status}`);
+  }
   if (!response.ok) {
     throw new Error(`Backend sync failed: ${response.status}`);
   }
@@ -724,6 +727,9 @@ async function pushBackendState(
     body: JSON.stringify({ records: finalRecords, history, interaction_logs: collapseSheetImportLogs(interaction_logs), telegram_settings }),
   });
 
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(`AUTH_ERROR_${response.status}`);
+  }
   if (!response.ok) {
     throw new Error(`Backend save failed: ${response.status}`);
   }
@@ -1051,6 +1057,9 @@ function App() {
         setTelegramSettings(state.telegram_settings);
       }
     } catch (err: any) {
+      if (err.message && err.message.startsWith("AUTH_ERROR")) {
+        handleLogout();
+      }
       setLoginError(err.message || "Something went wrong. Please check your credentials.");
     } finally {
       setLoginLoading(false);
@@ -1102,7 +1111,11 @@ function App() {
       if (state.telegram_settings) {
         setTelegramSettings(state.telegram_settings);
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (err.message && err.message.startsWith("AUTH_ERROR")) {
+        handleLogout();
+        return;
+      }
       console.error("Failed to refresh state from server:", err);
     }
   };
@@ -1170,6 +1183,10 @@ function App() {
         },
         body: JSON.stringify({ email: newEmail, password: newPassword, role: newRole }),
       });
+      if (response.status === 401 || response.status === 403) {
+        handleLogout();
+        return;
+      }
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.message || "Failed to create user");
@@ -1204,6 +1221,10 @@ function App() {
         },
         body: JSON.stringify({ email: resettingUser, password: resetPasswordVal }),
       });
+      if (response.status === 401 || response.status === 403) {
+        handleLogout();
+        return;
+      }
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.message || "Failed to reset password");
@@ -1235,6 +1256,10 @@ function App() {
           telegram_settings: telegramSettings
         }),
       });
+      if (response.status === 401 || response.status === 403) {
+        handleLogout();
+        return;
+      }
       if (!response.ok) throw new Error("Failed to save Telegram settings to database.");
       setTelegramSaveSuccess("Telegram Alert settings saved successfully!");
       setTimeout(() => setTelegramSaveSuccess(""), 3000);
@@ -1265,6 +1290,10 @@ function App() {
           message: telegramTestMessage || undefined
         }),
       });
+      if (response.status === 401 || response.status === 403) {
+        handleLogout();
+        return;
+      }
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || "Failed to dispatch Telegram message");
       setTelegramTestSuccess("🔔 Success! Telegram test notification dispatched.");
@@ -1283,6 +1312,10 @@ function App() {
       const response = await fetch(`${API_BASE_URL}/api/auth/users`, {
         headers: { "Authorization": `Bearer ${token}` },
       });
+      if (response.status === 401 || response.status === 403) {
+        handleLogout();
+        return;
+      }
       if (response.ok) {
         const data = await response.json();
         setUsersList(data);
@@ -1331,7 +1364,13 @@ function App() {
 
         // Silent background check to trigger any due Telegram alerts
         fetch(`${API_BASE_URL}/api/reminders/cron-check`).catch(() => {});
-      } catch (err) {
+      } catch (err: any) {
+        if (err.message && err.message.startsWith("AUTH_ERROR")) {
+          if (active) {
+            handleLogout();
+          }
+          return;
+        }
         console.warn("Backend state unavailable, using local persistence:", err);
         if (!active) return;
 
@@ -1371,7 +1410,11 @@ function App() {
       window.clearTimeout(syncTimerRef.current);
     }
     syncTimerRef.current = window.setTimeout(() => {
-      pushBackendState(records, uploadHistory, interactionLogs, telegramSettings).catch(() => {});
+      pushBackendState(records, uploadHistory, interactionLogs, telegramSettings).catch((err) => {
+        if (err.message && err.message.startsWith("AUTH_ERROR")) {
+          handleLogout();
+        }
+      });
     }, 700);
   }, [records, uploadHistory, interactionLogs, telegramSettings, recordsReady]);
 
@@ -1406,6 +1449,11 @@ function App() {
             viewingCustomerName
           })
         });
+
+        if (response.status === 401 || response.status === 403) {
+          handleLogout();
+          return;
+        }
 
         if (response.ok) {
           const data = await response.json();

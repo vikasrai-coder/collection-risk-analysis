@@ -13,7 +13,7 @@ echo "📦 Staging current working tree modifications..."
 git add .
 
 # Prompt or use a default message
-COMMIT_MSG="feat: implement lender-scoped auto-archiving on collection spreadsheet uploads"
+COMMIT_MSG="fix: handle automatic session eviction on authentication failures to resolve presence sync"
 echo "💾 Committing changes with message: '$COMMIT_MSG'..."
 git commit -m "$COMMIT_MSG" || echo "⚠️ No modifications to commit"
 
