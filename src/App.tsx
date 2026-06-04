@@ -106,6 +106,15 @@ type TelegramSettings = {
   agentName: string;
 };
 
+type ActiveUserSession = {
+  email: string;
+  role: string;
+  activePage: string;
+  viewingCustomerId: string | null;
+  viewingCustomerName: string | null;
+  lastHeartbeat: string;
+};
+
 type Draft = {
   customerName: string;
   lender?: string;
@@ -878,6 +887,34 @@ function makeFollowupGroupKey(record: CollectionRecord) {
   return `${record.userId}__${record.lender}`;
 }
 
+const getUserInitials = (email: string) => {
+  if (!email) return "OP";
+  const namePart = email.split("@")[0];
+  if (namePart.includes(".")) {
+    const parts = namePart.split(".");
+    return (parts[0].slice(0, 1) + (parts[1]?.slice(0, 1) || "")).toUpperCase();
+  }
+  return namePart.slice(0, 2).toUpperCase();
+};
+
+const getUserColor = (email: string) => {
+  let hash = 0;
+  for (let i = 0; i < email.length; i++) {
+    hash = email.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const colors = [
+    { bg: "bg-indigo-100 border-indigo-300 text-indigo-800 ring-indigo-500/20", dot: "bg-indigo-500" },
+    { bg: "bg-emerald-100 border-emerald-300 text-emerald-800 ring-emerald-500/20", dot: "bg-emerald-500" },
+    { bg: "bg-amber-100 border-amber-300 text-amber-800 ring-amber-500/20", dot: "bg-amber-500" },
+    { bg: "bg-rose-100 border-rose-300 text-rose-800 ring-rose-500/20", dot: "bg-rose-500" },
+    { bg: "bg-sky-100 border-sky-300 text-sky-800 ring-sky-500/20", dot: "bg-sky-500" },
+    { bg: "bg-purple-100 border-purple-300 text-purple-800 ring-purple-500/20", dot: "bg-purple-500" },
+    { bg: "bg-pink-100 border-pink-300 text-pink-800 ring-pink-500/20", dot: "bg-pink-500" },
+  ];
+  const index = Math.abs(hash) % colors.length;
+  return colors[index];
+};
+
 function App() {
   // Authentication states
   const [user, setUser] = useState<{ id: string; email: string; role: "admin" | "manager" } | null>(() => {
@@ -954,6 +991,7 @@ function App() {
     agentName: "",
   });
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [activeUsers, setActiveUsers] = useState<ActiveUserSession[]>([]);
   
   // Telegram testing states
   const [telegramTestMessage, setTelegramTestMessage] = useState("");
@@ -1340,6 +1378,49 @@ function App() {
   useEffect(() => {
     draftsRef.current = drafts;
   }, [drafts]);
+
+  // Live operator presence heartbeat effect (15s interval polling)
+  useEffect(() => {
+    if (!token || !user) {
+      setActiveUsers([]);
+      return;
+    }
+
+    const viewingCustomerId = selectedUserId || null;
+    const viewingCustomerName = selectedUserId && selectedUserRecord
+      ? selectedUserRecord.customerName
+      : null;
+
+    const sendHeartbeat = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/presence/heartbeat`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...getAuthHeader()
+          },
+          body: JSON.stringify({
+            activePage,
+            viewingCustomerId,
+            viewingCustomerName
+          })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data && Array.isArray(data.activeUsers)) {
+            setActiveUsers(data.activeUsers);
+          }
+        }
+      } catch (err) {
+        console.warn("Presence heartbeat failed:", err);
+      }
+    };
+
+    sendHeartbeat();
+    const intervalId = setInterval(sendHeartbeat, 15 * 1000);
+    return () => clearInterval(intervalId);
+  }, [token, user, activePage, selectedUserId, selectedUserRecord]);
 
   const lenders = useMemo(
     () => ["All", ...new Set(records.map((record) => record.lender).filter(Boolean))],
@@ -2762,6 +2843,89 @@ function App() {
                     {navItems.find((item) => item.key === activePage)?.label}
                   </h2>
                 </div>
+
+                {/* Live Operator Presence (Google Sheets style) */}
+                {activeUsers && activeUsers.filter(u => u.email !== user?.email).length > 0 && (
+                  <div className="flex items-center gap-2 border-l border-slate-200 pl-4 ml-4">
+                    <div className="flex -space-x-1.5 overflow-hidden">
+                      {activeUsers
+                        .filter(u => u.email !== user?.email)
+                        .slice(0, 4)
+                        .map((usr) => {
+                          const colors = getUserColor(usr.email);
+                          const initials = getUserInitials(usr.email);
+                          const isViewingCustomer = !!usr.viewingCustomerId;
+                          
+                          const pageNames: Record<string, string> = {
+                            dashboard: "Dashboard",
+                            followup: "Daily Follow-up",
+                            records: "All Records",
+                            upload: "Spreadsheet Upload",
+                            users: "Operator Registry",
+                            reminders: "Reminders Queue"
+                          };
+                          const pageLabel = pageNames[usr.activePage] || usr.activePage;
+                          
+                          const tooltipText = `${usr.email} (${usr.role})\n` +
+                            `Page: ${pageLabel}\n` +
+                            `${isViewingCustomer ? `Case File: ${usr.viewingCustomerName || usr.viewingCustomerId}` : "Not viewing any customer"}`;
+
+                          return (
+                            <div
+                              key={usr.email}
+                              className="group relative cursor-help"
+                              title={tooltipText}
+                            >
+                              <div className={`relative flex h-8 w-8 items-center justify-center rounded-full border-2 text-[11px] font-bold ring-2 ring-white transition-all duration-200 hover:scale-110 hover:z-30 shadow-sm ${colors.bg}`}>
+                                {initials}
+                                {isViewingCustomer && (
+                                  <span className="absolute -bottom-0.5 -right-0.5 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-emerald-500 ring-1 ring-white">
+                                    <span className="h-1 w-1 rounded-full bg-white animate-pulse" />
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Hover Tooltip Popup */}
+                              <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2.5 z-30 hidden group-hover:flex flex-col rounded-2xl border border-slate-200 bg-white p-3 shadow-xl w-64 transition-all duration-200 select-none pointer-events-none text-xs">
+                                <div className="flex items-center gap-2 border-b border-slate-100 pb-1.5 mb-1.5">
+                                  <span className={`h-2 w-2 rounded-full ${colors.dot} animate-pulse`} />
+                                  <span className="font-bold text-slate-800 truncate">{usr.email}</span>
+                                </div>
+                                <div className="space-y-1.5 text-slate-500">
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-medium text-slate-400">Role</span>
+                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 uppercase tracking-wider">{usr.role}</span>
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-medium text-slate-400">Viewing Page</span>
+                                    <span className="font-bold text-slate-700 capitalize">{pageLabel}</span>
+                                  </div>
+                                  {isViewingCustomer && (
+                                    <div className="mt-1 rounded-xl bg-cyan-50/50 p-2 border border-cyan-100/50 text-[11px] text-cyan-900">
+                                      <span className="font-semibold text-cyan-800 block text-[10px] uppercase tracking-wider">Active Customer Drawer:</span>
+                                      <span className="font-bold block mt-0.5 truncate">{usr.viewingCustomerName || "Merchant ID: " + usr.viewingCustomerId}</span>
+                                      <span className="text-[10px] text-cyan-600/70 font-mono block mt-0.5">{usr.viewingCustomerId}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                      {activeUsers.filter(u => u.email !== user?.email).length > 4 && (
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-slate-200 bg-slate-100 text-[11px] font-black text-slate-600 ring-2 ring-white shadow-sm" title={`${activeUsers.filter(u => u.email !== user?.email).length - 4} more active operators`}>
+                          +{activeUsers.filter(u => u.email !== user?.email).length - 4}
+                        </div>
+                      )}
+                    </div>
+                    
+                    <span className="hidden xl:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      {activeUsers.filter(u => u.email !== user?.email).length} Active Operator{activeUsers.filter(u => u.email !== user?.email).length > 1 ? "s" : ""}
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className={`flex flex-wrap items-center gap-3 ${

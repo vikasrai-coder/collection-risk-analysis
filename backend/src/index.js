@@ -722,6 +722,55 @@ app.post('/api/telegram-settings', async (req, res) => {
   }
 });
 
+// Live Operator Presence Heartbeat Route
+app.post('/api/presence/heartbeat', authenticateToken, async (req, res) => {
+  const { email, role } = req.user || {};
+  const { activePage, viewingCustomerId, viewingCustomerName } = req.body || {};
+
+  if (!email) {
+    return res.status(400).json({ message: 'User context is missing' });
+  }
+
+  try {
+    const selectRes = await query(
+      "SELECT payload FROM app_state WHERE state_key = 'active_users'"
+    );
+    const existingSessions = selectRes.rows[0]?.payload || [];
+
+    const now = new Date();
+    const threshold = 35 * 1000;
+    const cleanSessions = existingSessions.filter(session => {
+      if (!session || !session.lastHeartbeat) return false;
+      const diff = now.getTime() - new Date(session.lastHeartbeat).getTime();
+      return diff < threshold && session.email !== email;
+    });
+
+    cleanSessions.push({
+      email,
+      role,
+      activePage: activePage || 'dashboard',
+      viewingCustomerId: viewingCustomerId || null,
+      viewingCustomerName: viewingCustomerName || null,
+      lastHeartbeat: now.toISOString()
+    });
+
+    await query(
+      `
+      INSERT INTO app_state (state_key, payload, updated_at)
+      VALUES ($1, $2::jsonb, NOW())
+      ON CONFLICT (state_key)
+      DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
+      `,
+      ['active_users', JSON.stringify(cleanSessions)]
+    );
+
+    res.json({ ok: true, activeUsers: cleanSessions });
+  } catch (error) {
+    console.error('Presence heartbeat error:', error.message);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Direct Test Alert Endpoint
 app.post('/api/reminders/send-test', async (req, res) => {
   const { botToken, chatId, message } = req.body || {};
