@@ -685,8 +685,11 @@ function getAuthHeader() {
   return token ? { "Authorization": `Bearer ${token}` } : {};
 }
 
-async function fetchBackendState() {
-  const response = await fetch(`${API_BASE_URL}/api/state`, {
+async function fetchBackendState(lastUpdatedAt?: string | null) {
+  const url = lastUpdatedAt
+    ? `${API_BASE_URL}/api/state?lastUpdatedAt=${encodeURIComponent(lastUpdatedAt)}`
+    : `${API_BASE_URL}/api/state`;
+  const response = await fetch(url, {
     headers: getAuthHeader()
   });
   if (response.status === 401 || response.status === 403) {
@@ -974,6 +977,7 @@ function App() {
   const [recordsReady, setRecordsReady] = useState(false);
   const syncTimerRef = useRef<number | null>(null);
   const draftsRef = useRef<Record<string, Draft>>({});
+  const lastUpdatedAtRef = useRef<string | null>(null);
 
   // New States for chronological log, telegram setup, and selected user view
   const [interactionLogs, setInteractionLogs] = useState<InteractionHistoryItem[]>([]);
@@ -1030,7 +1034,10 @@ function App() {
       setLoginPassword("");
       
       // Fetch fresh backend state after logging in
-      const state = await fetchBackendState();
+      const state = await fetchBackendState(lastUpdatedAtRef.current);
+      if (state.updatedAt) {
+        lastUpdatedAtRef.current = state.updatedAt;
+      }
       if (Array.isArray(state.records) && state.records.length) {
         setRecords(cleanupAndResetStaleRecords(restrictToAllowedLenders(state.records)));
       }
@@ -1085,7 +1092,13 @@ function App() {
 
   const refreshStateFromServer = async () => {
     try {
-      const state = await fetchBackendState();
+      const state = await fetchBackendState(lastUpdatedAtRef.current);
+      if (state.upToDate) {
+        return;
+      }
+      if (state.updatedAt) {
+        lastUpdatedAtRef.current = state.updatedAt;
+      }
       if (Array.isArray(state.records)) {
         setRecords(cleanupAndResetStaleRecords(restrictToAllowedLenders(state.records)));
       }
@@ -1110,12 +1123,25 @@ function App() {
   useEffect(() => {
     if (!token) return;
     
-    // Poll the backend state every 30 seconds for live scheduler/telegram dispatches
+    // Poll the backend state every 30 seconds (only if tab is visible) for live scheduler/telegram dispatches
     const interval = setInterval(() => {
-      refreshStateFromServer();
+      if (document.visibilityState === 'visible') {
+        refreshStateFromServer();
+      }
     }, 30000);
     
-    return () => clearInterval(interval);
+    // Fetch immediately when tab becomes visible
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshStateFromServer();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [token]);
 
   const handleRunCron = async () => {
@@ -1325,8 +1351,12 @@ function App() {
 
     async function initApp() {
       try {
-        const state = await fetchBackendState();
+        const state = await fetchBackendState(lastUpdatedAtRef.current);
         if (!active) return;
+
+        if (state.updatedAt) {
+          lastUpdatedAtRef.current = state.updatedAt;
+        }
 
         if (Array.isArray(state.records) && state.records.length) {
           setRecords(cleanupAndResetStaleRecords(restrictToAllowedLenders(state.records)));
@@ -1397,11 +1427,17 @@ function App() {
       window.clearTimeout(syncTimerRef.current);
     }
     syncTimerRef.current = window.setTimeout(() => {
-      pushBackendState(records, uploadHistory, interactionLogs, telegramSettings).catch((err) => {
-        if (err.message && err.message.startsWith("AUTH_ERROR")) {
-          handleLogout();
-        }
-      });
+      pushBackendState(records, uploadHistory, interactionLogs, telegramSettings)
+        .then((res) => {
+          if (res && res.updatedAt) {
+            lastUpdatedAtRef.current = res.updatedAt;
+          }
+        })
+        .catch((err) => {
+          if (err.message && err.message.startsWith("AUTH_ERROR")) {
+            handleLogout();
+          }
+        });
     }, 700);
   }, [records, uploadHistory, interactionLogs, telegramSettings, recordsReady]);
 
@@ -1423,6 +1459,7 @@ function App() {
     const viewingCustomerName = activeRec ? activeRec.customerName : null;
 
     const sendHeartbeat = async () => {
+      if (document.visibilityState !== 'visible') return;
       try {
         const response = await fetch(`${API_BASE_URL}/api/presence/heartbeat`, {
           method: "POST",

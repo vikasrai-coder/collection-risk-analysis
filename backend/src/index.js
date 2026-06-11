@@ -541,8 +541,68 @@ app.post('/api/auth/forgot-password', async (req, res) => {
   }
 });
 
-app.get('/api/state', async (_req, res) => {
+app.get('/api/state', async (req, res) => {
+  const { lastUpdatedAt } = req.query || {};
+
   try {
+    // 1. Fetch only timestamps to verify if anything changed
+    const tsResult = await query(
+      'SELECT state_key, updated_at FROM app_state WHERE state_key IN ($1, $2, $3, $4)',
+      ['records', 'history', 'interaction_logs', 'telegram_settings']
+    );
+
+    let maxUpdatedAt = null;
+    for (const row of tsResult.rows) {
+      if (!maxUpdatedAt || row.updated_at > maxUpdatedAt) {
+        maxUpdatedAt = row.updated_at;
+      }
+    }
+
+    // Check if date has rolled over in IST since records were last updated
+    let dateRolledOver = false;
+    const recordsRow = tsResult.rows.find(row => row.state_key === 'records');
+    if (recordsRow && recordsRow.updated_at) {
+      try {
+        const options = {
+          timeZone: "Asia/Kolkata",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit"
+        };
+        const formatter = new Intl.DateTimeFormat("en-US", options);
+        
+        const todayParts = formatter.formatToParts(new Date());
+        const todayMap = {};
+        for (const p of todayParts) { todayMap[p.type] = p.value; }
+        const todayIstStr = `${todayMap.year}-${todayMap.month}-${todayMap.day}`;
+
+        const recParts = formatter.formatToParts(new Date(recordsRow.updated_at));
+        const recMap = {};
+        for (const p of recParts) { recMap[p.type] = p.value; }
+        const recordsIstStr = `${recMap.year}-${recMap.month}-${recMap.day}`;
+
+        if (todayIstStr !== recordsIstStr) {
+          dateRolledOver = true;
+        }
+      } catch (e) {
+        // Fallback to full fetch if time zone formatting fails
+        dateRolledOver = true;
+      }
+    } else {
+      // If no records row exists yet, force a full fetch
+      dateRolledOver = true;
+    }
+
+    if (lastUpdatedAt && maxUpdatedAt && !dateRolledOver) {
+      const clientTime = new Date(lastUpdatedAt).getTime();
+      const serverTime = new Date(maxUpdatedAt).getTime();
+      // Use 1000ms threshold to handle rounding/serialization differences
+      if (clientTime >= serverTime || Math.abs(serverTime - clientTime) < 1000) {
+        return res.json({ upToDate: true });
+      }
+    }
+
+    // 2. Fetch full payload since client is out of date or date rolled over
     const result = await query(
       'SELECT state_key, payload, updated_at FROM app_state WHERE state_key IN ($1, $2, $3, $4)',
       ['records', 'history', 'interaction_logs', 'telegram_settings'],
@@ -577,15 +637,19 @@ app.get('/api/state', async (_req, res) => {
     }
 
     if (recordsUpdated) {
-      await query(
+      const updateRes = await query(
         `
         INSERT INTO app_state (state_key, payload, updated_at)
         VALUES ($1, $2::jsonb, NOW())
         ON CONFLICT (state_key)
         DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
+        RETURNING updated_at
         `,
         ['records', JSON.stringify(recordsList)],
       );
+      if (updateRes.rows[0]?.updated_at) {
+        payload.updatedAt = updateRes.rows[0].updated_at;
+      }
     }
 
     res.json(payload);
@@ -670,9 +734,16 @@ app.post('/api/state', async (req, res) => {
       );
     }
 
+    // Fetch the updated max timestamp to return to the client so it can update its lastUpdatedAtRef
+    const timeRes = await query(
+      "SELECT MAX(updated_at) as max_time FROM app_state WHERE state_key IN ('records', 'history', 'interaction_logs', 'telegram_settings')"
+    );
+    const dbNow = timeRes.rows[0]?.max_time;
+
     res.json({
       ok: true,
       database: getDatabaseStatus(),
+      updatedAt: dbNow || new Date().toISOString(),
       recordCount: Array.isArray(records) ? records.length : 0,
       historyCount: Array.isArray(history) ? history.length : 0,
       interactionCount: Array.isArray(interaction_logs) ? interaction_logs.length : 0,
@@ -699,7 +770,17 @@ app.post('/api/telegram-settings', async (req, res) => {
       `,
       ['telegram_settings', JSON.stringify(telegram_settings)],
     );
-    res.json({ ok: true, message: 'Telegram settings updated successfully' });
+
+    const timeRes = await query(
+      "SELECT updated_at FROM app_state WHERE state_key = 'telegram_settings'"
+    );
+    const dbNow = timeRes.rows[0]?.updated_at;
+
+    res.json({ 
+      ok: true, 
+      message: 'Telegram settings updated successfully',
+      updatedAt: dbNow || new Date().toISOString()
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -1028,21 +1109,21 @@ app.get('/api/reminders/cron-check', async (req, res) => {
   }
 });
 
-// Check every 1 minute in background (in local environments) for high-precision alerts
-setInterval(() => checkAndSendTelegramReminders(false), 1 * 60 * 1000);
+// Check every 1 minute in background (in local environments only, not on Vercel)
+if (!process.env.VERCEL) {
+  setInterval(() => checkAndSendTelegramReminders(false), 1 * 60 * 1000);
+}
 
-if (process.env.NODE_ENV !== 'production' || process.env.VERCEL) {
+if (!process.env.VERCEL) {
   ensureSchema()
     .then(() => {
-      if (!process.env.VERCEL) {
-        app.listen(PORT, () => {
-          console.log(`Collection Risk backend running on ${PORT}`);
-        });
-      }
+      app.listen(PORT, () => {
+        console.log(`Collection Risk backend running on ${PORT}`);
+      });
     })
     .catch((error) => {
       console.error('Backend startup failed:', error.message);
-      if (!process.env.VERCEL) process.exit(1);
+      process.exit(1);
     });
 }
 
