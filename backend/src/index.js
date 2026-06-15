@@ -8,6 +8,7 @@ import https from 'https';
 import nodemailer from 'nodemailer';
 import { ensureSchema } from './utils/schema.js';
 import { getDatabaseStatus, query } from './utils/database.js';
+import { createClient } from '@supabase/supabase-js';
 import { findUserByEmail, createUser, getAllUsers, updateUserPassword } from './utils/auth.js';
 
 dotenv.config();
@@ -175,6 +176,88 @@ function cleanupAndResetStaleRecords(records) {
     };
 
     return updatedRec;
+  });
+}
+
+// Helper to enrich records with customer profile details (anchor name and phone) from DB
+async function enrichRecordsWithProfiles(records) {
+  if (!Array.isArray(records) || records.length === 0) return records;
+
+  // Find all records that are missing anchor, mobile, or alternateNumber
+  const recordsToEnrich = records.filter(rec => 
+    !rec.anchor || !rec.mobile || !rec.alternateNumber
+  );
+
+  if (recordsToEnrich.length === 0) return records;
+
+  const userIds = [...new Set(recordsToEnrich.map(rec => rec.userId).filter(Boolean))];
+  if (userIds.length === 0) return records;
+
+  const profilesMap = new Map();
+
+  // 1. Try fetching from Supabase first
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (supabaseUrl && supabaseKey) {
+    try {
+      const supabase = createClient(supabaseUrl, supabaseKey);
+      const { data, error } = await supabase
+        .from('customer_profiles')
+        .select('customer_id, mobile, anchor_name, alternate_mobile')
+        .in('customer_id', userIds);
+      
+      if (!error && data) {
+        for (const p of data) {
+          profilesMap.set(p.customer_id, {
+            mobile: p.mobile || '',
+            anchor_name: p.anchor_name || '',
+            alternate_mobile: p.alternate_mobile || ''
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching profiles from Supabase:', e);
+    }
+  }
+
+  // 2. Fallback to local PG for any userIds not found in Supabase (or if Supabase is not configured)
+  const remainingUserIds = userIds.filter(id => !profilesMap.has(id));
+  if (remainingUserIds.length > 0) {
+    try {
+      const res = await query(
+        `SELECT customer_id, mobile, anchor_name, alternate_mobile 
+         FROM customer_profiles 
+         WHERE customer_id = ANY($1)`,
+        [remainingUserIds]
+      );
+      if (res && res.rows) {
+        for (const p of res.rows) {
+          profilesMap.set(p.customer_id, {
+            mobile: p.mobile || '',
+            anchor_name: p.anchor_name || '',
+            alternate_mobile: p.alternate_mobile || ''
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching profiles from local PG:', e);
+    }
+  }
+
+  // 3. Map and enrich the records
+  return records.map(rec => {
+    if (!rec.anchor || !rec.mobile || !rec.alternateNumber) {
+      const profile = profilesMap.get(rec.userId);
+      if (profile) {
+        return {
+          ...rec,
+          anchor: rec.anchor || profile.anchor_name || '',
+          mobile: rec.mobile || profile.mobile || '',
+          alternateNumber: rec.alternateNumber || profile.alternate_mobile || ''
+        };
+      }
+    }
+    return rec;
   });
 }
 
@@ -622,7 +705,8 @@ app.get('/api/state', async (req, res) => {
     for (const row of result.rows) {
       if (row.state_key === 'records') {
         const rawRecords = row.payload || [];
-        recordsList = cleanupAndResetStaleRecords(rawRecords);
+        const cleanedRecords = cleanupAndResetStaleRecords(rawRecords);
+        recordsList = await enrichRecordsWithProfiles(cleanedRecords);
         if (JSON.stringify(rawRecords) !== JSON.stringify(recordsList)) {
           recordsUpdated = true;
         }
@@ -668,7 +752,8 @@ app.post('/api/state', async (req, res) => {
     );
     const sentReminders = sentResult.rows[0]?.payload || [];
 
-    const finalRecords = cleanupAndResetStaleRecords(records).map(rec => {
+    const enrichedRecords = await enrichRecordsWithProfiles(records);
+    const finalRecords = cleanupAndResetStaleRecords(enrichedRecords).map(rec => {
       const key = `${rec.userId}-${rec.followUpDate || 'no-date'}-${rec.followUpTime || 'no-time'}`;
       if (sentReminders.includes(key)) {
         return { ...rec, reminderEnabled: false };
