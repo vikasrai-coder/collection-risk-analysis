@@ -160,23 +160,32 @@ function cleanupAndResetStaleRecords(records) {
   const todayStr = `${partMap.year}-${partMap.month}-${partMap.day}`; // "YYYY-MM-DD"
   const currentTimeStr = `${partMap.hour}:${partMap.minute}`; // "HH:MM"
 
-  return records.map(rec => {
-    // Calculate pending days (only for active defaults)
-    const isResolved =
-      rec.callStatus === "Payment Done" ||
-      rec.status === "Closed" ||
-      rec.status === "Payment Clear";
-    const pDays = isResolved ? 0 : calculatePendingDays(rec.collectionDate);
+  return records
+    .filter(rec => {
+      const isLenderBlank = !rec.lender || rec.lender.trim() === "";
+      if (isLenderBlank) {
+        const hasComment = rec.remark && rec.remark.trim() !== "";
+        return hasComment;
+      }
+      return true;
+    })
+    .map(rec => {
+      // Calculate pending days (only for active defaults)
+      const isResolved =
+        rec.callStatus === "Payment Done" ||
+        rec.status === "Closed" ||
+        rec.status === "Payment Clear";
+      const pDays = isResolved ? 0 : calculatePendingDays(rec.collectionDate);
 
-    // Copy record to update it
-    let updatedRec = { 
-      ...rec,
-      pendingDays: pDays,
-      defaultDays: pDays
-    };
+      // Copy record to update it
+      let updatedRec = { 
+        ...rec,
+        pendingDays: pDays,
+        defaultDays: pDays
+      };
 
-    return updatedRec;
-  });
+      return updatedRec;
+    });
 }
 
 // Helper to enrich records with customer profile details (anchor name and phone) from DB

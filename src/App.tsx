@@ -573,27 +573,36 @@ function cleanupAndResetStaleRecords(records: CollectionRecord[]): CollectionRec
   const todayStr = `${partMap.year}-${partMap.month}-${partMap.day}`; // "YYYY-MM-DD"
   const currentTimeStr = `${partMap.hour}:${partMap.minute}`; // "HH:MM"
 
-  return records.map(rec => {
-    // Calculate pending days (only for active defaults)
-    const isResolved =
-      rec.callStatus === "Payment Done" ||
-      rec.status === "Closed" ||
-      rec.status === "Payment Clear";
-    const pDays = isResolved ? 0 : calculatePendingDays(rec.collectionDate);
+  return records
+    .filter(rec => {
+      const isLenderBlank = !rec.lender || rec.lender.trim() === "";
+      if (isLenderBlank) {
+        const hasComment = rec.remark && rec.remark.trim() !== "";
+        return hasComment;
+      }
+      return true;
+    })
+    .map(rec => {
+      // Calculate pending days (only for active defaults)
+      const isResolved =
+        rec.callStatus === "Payment Done" ||
+        rec.status === "Closed" ||
+        rec.status === "Payment Clear";
+      const pDays = isResolved ? 0 : calculatePendingDays(rec.collectionDate);
 
-    // Copy record to update it, ensuring new fields are initialized
-    const updatedRec = {
-      ...rec,
-      pendingAmount: rec.pendingAmount ?? rec.defaultAmount,
-      partialPaymentSettled: rec.partialPaymentSettled ?? 0,
-      remarkHistory: rec.remarkHistory ?? [],
-      updatedBy: rec.updatedBy,
-      pendingDays: pDays,
-      defaultDays: pDays,
-    };
+      // Copy record to update it, ensuring new fields are initialized
+      const updatedRec = {
+        ...rec,
+        pendingAmount: rec.pendingAmount ?? rec.defaultAmount,
+        partialPaymentSettled: rec.partialPaymentSettled ?? 0,
+        remarkHistory: rec.remarkHistory ?? [],
+        updatedBy: rec.updatedBy,
+        pendingDays: pDays,
+        defaultDays: pDays,
+      };
 
-    return updatedRec;
-  });
+      return updatedRec;
+    });
 }
 
 function getTodayIstString(): string {
@@ -2018,6 +2027,7 @@ function App() {
         // Track every loanId actually present in this upload
         const uploadedLoanIds = new Set<string>();
         const lendersInUpload = new Set<string>();
+        const blankLenderNotUploadedUserIds = new Set<string>();
 
         for (const row of data) {
           const userId = valueFromRow(row, ["userId", "user_id", "customer_id", "customerId"]);
@@ -2029,10 +2039,40 @@ function App() {
             continue;
           }
 
+          // Fallback matching: If direct lookup fails, find by userId where lender exists in system
+          let matchedRecordKey: string | null = null;
+          let existing = nextByLoanId.get(loanId);
+
+          if (!existing) {
+            const matchingRecord = Array.from(nextByLoanId.values()).find(
+              (r) => r.userId === userId && r.lender && r.lender.trim() !== ""
+            );
+            if (matchingRecord) {
+              existing = matchingRecord;
+              matchedRecordKey = matchingRecord.loanId;
+            }
+          } else {
+            matchedRecordKey = loanId;
+          }
+
+          // If lender is blank, and no existing record has a lender for this userId: do not upload
+          if ((!lender || lender.trim() === "") && !existing) {
+            blankLenderNotUploadedUserIds.add(userId);
+            skipped += 1;
+            continue;
+          }
+
           // Mark this loanId as present in today's upload
-          uploadedLoanIds.add(loanId);
+          if (matchedRecordKey) {
+            uploadedLoanIds.add(matchedRecordKey);
+          } else {
+            uploadedLoanIds.add(loanId);
+          }
+
           if (lender) {
             lendersInUpload.add(lender.toLowerCase().trim());
+          } else if (existing && existing.lender) {
+            lendersInUpload.add(existing.lender.toLowerCase().trim());
           }
 
           const customerName = normalizedText(valueFromRow(row, ["customerName", "customer", "name", "merchant", "merchantName"]));
@@ -2057,8 +2097,6 @@ function App() {
           const csvRemark = valueFromRow(row, ["remark", "remarks", "comment", "comments", "agentRemark", "agentRemarks", "remarks_comment", "remark_comment"]);
           const csvFollowUpDate = valueFromRow(row, ["followUpDate", "follow_up_date", "nextActionDate", "nextCallDate", "followupdate"]);
 
-          const existing = nextByLoanId.get(loanId);
-
           if (existing) {
             // Status Isolation: If record is already resolved, preserve it completely (don't touch payment done records)
             if (
@@ -2067,7 +2105,7 @@ function App() {
               existing.status === "Payment Clear"
             ) {
               // Keep the record in nextByLoanId but don't modify it
-              uploadedLoanIds.add(loanId); // prevent auto-archive of payment-done records
+              uploadedLoanIds.add(matchedRecordKey || loanId); // prevent auto-archive of payment-done records
               skipped += 1;
               continue;
             }
@@ -2080,7 +2118,7 @@ function App() {
             const updatedRec = {
               ...existing,
               userId,
-              loanId,
+              loanId: existing.loanId || loanId,
               // FIELD PROTECTION: existing non-empty agent-edited values are NEVER overwritten by CSV.
               // CSV data only fills in blank/missing fields. This covers both manuallyEditedFields
               // and any value the agent set that wasn't explicitly flagged.
@@ -2119,13 +2157,13 @@ function App() {
               partialPaymentSettled: existing.partialPaymentSettled,
             };
             
-            nextByLoanId.set(loanId, updatedRec);
+            nextByLoanId.set(matchedRecordKey || loanId, updatedRec);
             updated += 1;
 
             // Only log if the CSV sheet brought in new remarks/status not previously present
             if (isNewRemark || isNewStatus) {
               addSheetImportLog({
-                loanId: loanId,
+                loanId: existing.loanId || loanId,
                 userId: userId,
                 customerName: updatedRec.customerName,
                 callStatus: updatedRec.callStatus,
@@ -2257,11 +2295,20 @@ function App() {
           setInteractionLogs((prev) => mergeInteractionLogs(prev, newLogs));
         }
 
-        const message =
+        let message =
           created || updated || archived
             ? `${created} new, ${updated} updated, ${archived} auto-archived, ${skipped} skipped${matchedWithoutLoanId ? `, ${matchedWithoutLoanId} matched without loanId` : ""}`
             : `No usable rows found. Check that the CSV has userId and collection columns.`;
+        if (blankLenderNotUploadedUserIds.size > 0) {
+          message += ` (Skipped ${blankLenderNotUploadedUserIds.size} user(s) due to missing lender details)`;
+        }
         setLastUploadMessage(message);
+        
+        if (blankLenderNotUploadedUserIds.size > 0) {
+          const skippedIds = Array.from(blankLenderNotUploadedUserIds).join(", ");
+          alert(`Not Uploaded: User ID(s) [${skippedIds}] were not uploaded because lender details were blank and no existing records with a lender were found for these users.`);
+        }
+
         pushHistory({
           type: "collection",
           fileName: file.name,
