@@ -27,6 +27,7 @@ import {
   FileText,
   ArrowLeft,
   History,
+  RotateCcw,
 } from "lucide-react";
 
 type Page = "dashboard" | "followup" | "records" | "upload" | "users" | "reminders";
@@ -2499,6 +2500,67 @@ function App() {
     setEditingId("");
   }
 
+  const handleRevertToPending = useCallback((targetUserId: string, targetRecordId?: string) => {
+    const timestamp = new Date().toISOString();
+    const agent = user?.email || "Agent";
+    const newLogs: InteractionHistoryItem[] = [];
+
+    setRecords((current) =>
+      current.map((rec) => {
+        const match = targetRecordId
+          ? rec.id === targetRecordId
+          : rec.userId === targetUserId;
+
+        const needsRevert =
+          match &&
+          (rec.callStatus === "Payment Done" ||
+            rec.status === "Closed" ||
+            rec.status === "Payment Clear");
+
+        if (needsRevert) {
+          const baseRemark = rec.remark || "";
+          const cleanRemark = baseRemark.includes("Auto-Archived")
+            ? baseRemark
+            : baseRemark.trim();
+          
+          const newRemark = cleanRemark
+            ? `${cleanRemark} | Reverted to Pending (initiated by ${agent})`
+            : `Reverted to Pending (initiated by ${agent})`;
+
+          newLogs.push({
+            id: `revert-${rec.id}-${Date.now()}-${slug()}`,
+            loanId: rec.loanId,
+            userId: rec.userId,
+            customerName: rec.customerName,
+            callStatus: "Pending",
+            remark: newRemark,
+            followUpDate: "",
+            followUpTime: "",
+            updatedAt: timestamp,
+            updatedBy: agent,
+          });
+
+          return {
+            ...rec,
+            callStatus: "Pending",
+            status: "Bounced",
+            remark: newRemark,
+            followUpDate: "",
+            followUpTime: "",
+            reminderEnabled: true,
+            updatedAt: timestamp,
+            updatedBy: agent,
+          };
+        }
+        return rec;
+      })
+    );
+
+    if (newLogs.length > 0) {
+      setInteractionLogs((prev) => mergeInteractionLogs(prev, newLogs));
+    }
+  }, [user, setRecords, setInteractionLogs]);
+
   function saveFollowupGroup(groupKey: string, sourceIds: string[]) {
     const draft = draftsRef.current[groupKey];
     if (!draft) return;
@@ -3436,7 +3498,7 @@ function App() {
                             <th className="pb-3 font-medium">Lender</th>
                             <th className="pb-3 font-medium">Default</th>
                             <th className="pb-3 font-medium">Closed On</th>
-                            <th className="pb-3 font-medium">Timeline</th>
+                            <th className="pb-3 font-medium">Actions</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -3457,13 +3519,25 @@ function App() {
                                 <td className="py-3 text-xs text-slate-500">{record.lender || "-"}</td>
                                 <td className="py-3 font-semibold text-emerald-700">{formatCurrency(record.defaultAmount)}</td>
                                 <td className="py-3 text-xs text-slate-500">{formatDate(record.updatedAt)}</td>
-                                <td className="py-3">
+                                <td className="py-3 flex items-center gap-2">
                                   <button
                                     onClick={() => setSelectedUserId(record.userId)}
                                     className="inline-flex items-center gap-1 rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-100 transition"
                                   >
                                     <History className="h-3 w-3" />
                                     View Timeline
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      if (confirm(`Revert invoice "${record.loanId}" back to Pending queue?`)) {
+                                        handleRevertToPending(record.userId, record.id);
+                                      }
+                                    }}
+                                    className="inline-flex items-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100 transition active:scale-[0.98]"
+                                    title="Revert to Pending"
+                                  >
+                                    <RotateCcw className="h-3 w-3" />
+                                    Revert
                                   </button>
                                 </td>
                               </tr>
@@ -4915,7 +4989,22 @@ function App() {
                             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
                               <div className="flex items-center justify-between">
                                 <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Current Status</span>
-                                <StatusPill value={selectedUserRecord.callStatus || selectedUserRecord.status || "Pending"} />
+                                <div className="flex items-center gap-2">
+                                  <StatusPill value={selectedUserRecord.callStatus || selectedUserRecord.status || "Pending"} />
+                                  {(selectedUserRecord.callStatus === "Payment Done" || selectedUserRecord.status === "Closed" || selectedUserRecord.status === "Payment Clear") && (
+                                    <button
+                                      onClick={() => {
+                                        if (confirm(`Revert user "${selectedUserRecord.userId}" and all associated invoices back to Pending queue?`)) {
+                                          handleRevertToPending(selectedUserRecord.userId);
+                                        }
+                                      }}
+                                      className="rounded-lg bg-rose-50 text-rose-600 border border-rose-100 hover:bg-rose-100 p-1.5 transition active:scale-[0.98]"
+                                      title="Revert case to Pending"
+                                    >
+                                      <RotateCcw className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                </div>
                               </div>
 
                               <div className="pt-2 border-t border-slate-100">
@@ -4949,6 +5038,106 @@ function App() {
                                     {selectedUserRecord.anchor || "-"}
                                   </div>
                                 </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Associated Invoices & Loans */}
+                          {selectedUserRecord && (
+                            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm space-y-4 animate-fade-in">
+                              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                                <div className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+                                  <FileSpreadsheet className="h-4 w-4 text-slate-500" />
+                                  Associated Invoices ({records.filter((r) => r.userId === selectedUserRecord.userId).length})
+                                </div>
+                                {records.filter(
+                                  (r) =>
+                                    r.userId === selectedUserRecord.userId &&
+                                    (r.callStatus === "Payment Done" || r.status === "Closed" || r.status === "Payment Clear")
+                                ).length > 0 && (
+                                  <button
+                                    onClick={() => {
+                                      if (
+                                        confirm(
+                                          `Are you sure you want to revert ALL resolved invoices for user ${selectedUserRecord.userId} back to Pending?`
+                                        )
+                                      ) {
+                                        handleRevertToPending(selectedUserRecord.userId);
+                                      }
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-100 rounded-xl hover:bg-rose-100 transition active:scale-[0.98]"
+                                    title="Revert all closed cases for this user to Pending"
+                                  >
+                                    <RotateCcw className="h-2.5 w-2.5" />
+                                    Revert All
+                                  </button>
+                                )}
+                              </div>
+                              
+                              <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
+                                {records
+                                  .filter((r) => r.userId === selectedUserRecord.userId)
+                                  .map((rec) => {
+                                    const isResolved =
+                                      rec.callStatus === "Payment Done" ||
+                                      rec.status === "Closed" ||
+                                      rec.status === "Payment Clear";
+                                      
+                                    return (
+                                      <div
+                                        key={rec.id}
+                                        className={`rounded-2xl p-3 border text-xs flex flex-col gap-2 transition ${
+                                          isResolved
+                                            ? "bg-emerald-50/20 border-emerald-100/60"
+                                            : "bg-slate-50/40 border-slate-100"
+                                        }`}
+                                      >
+                                        <div className="flex items-center justify-between">
+                                          <span className="font-bold text-slate-700 font-mono select-all">
+                                            {rec.loanId}
+                                          </span>
+                                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                            isResolved
+                                              ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                                              : "bg-amber-100 text-amber-800 border border-amber-200"
+                                          }`}>
+                                            {rec.callStatus || rec.status || "Pending"}
+                                          </span>
+                                        </div>
+                                        
+                                        <div className="flex items-center justify-between text-[11px] text-slate-500">
+                                          <div>
+                                            <span className="text-slate-400">Lender:</span>{" "}
+                                            <span className="font-semibold text-slate-600">{rec.lender || "-"}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400">Balance:</span>{" "}
+                                            <span className="font-bold text-slate-700">{formatCurrency(rec.defaultAmount)}</span>
+                                          </div>
+                                        </div>
+
+                                        {isResolved && (
+                                          <div className="flex justify-end pt-1 border-t border-dashed border-emerald-100">
+                                            <button
+                                              onClick={() => {
+                                                if (
+                                                  confirm(
+                                                    `Are you sure you want to revert invoice "${rec.loanId}" to Pending?`
+                                                  )
+                                                ) {
+                                                  handleRevertToPending(selectedUserRecord.userId, rec.id);
+                                                }
+                                              }}
+                                              className="inline-flex items-center gap-1 text-[11px] text-rose-600 hover:text-rose-700 font-bold transition hover:underline"
+                                            >
+                                              <RotateCcw className="h-2.5 w-2.5" />
+                                              Revert invoice
+                                            </button>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
                               </div>
                             </div>
                           )}
