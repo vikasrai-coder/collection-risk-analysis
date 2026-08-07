@@ -1400,7 +1400,7 @@ function App() {
   const [isTestingApi, setIsTestingApi] = useState(false);
 
   const fetchApiKeys = useCallback(async () => {
-    if (!token || user?.role !== "admin") return;
+    if (!token) return;
     setIsLoadingApiKeys(true);
     try {
       const res = await fetch(`${API_BASE_URL}/api/admin/api-keys`, {
@@ -1418,13 +1418,13 @@ function App() {
     } finally {
       setIsLoadingApiKeys(false);
     }
-  }, [token, user, testerSelectedKey]);
+  }, [token, testerSelectedKey]);
 
   useEffect(() => {
-    if (activePage === "api" && user?.role === "admin") {
+    if (activePage === "api") {
       fetchApiKeys();
     }
-  }, [activePage, user, fetchApiKeys]);
+  }, [activePage, fetchApiKeys]);
 
   const handleCreateApiKey = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2828,12 +2828,8 @@ function App() {
     { key: "reminders", label: "Reminders", icon: BellRing },
     { key: "records", label: "Records", icon: FileSpreadsheet },
     { key: "upload", label: "Upload", icon: Upload },
-    ...(user?.role === "admin"
-      ? [
-          { key: "users" as Page, label: "Users", icon: Users },
-          { key: "api" as Page, label: "API & Keys", icon: Key },
-        ]
-      : []),
+    ...(user?.role === "admin" ? [{ key: "users" as Page, label: "Users", icon: Users }] : []),
+    { key: "api", label: "API & Keys", icon: Key },
   ];
 
   if (!token || !user) {
@@ -5064,7 +5060,7 @@ function App() {
               </div>
             )}
 
-            {activePage === "api" && user?.role === "admin" && (
+            {activePage === "api" && (
               <div className="space-y-6 animate-fade-in">
                 {/* Top Header Banner */}
                 <div className="rounded-3xl border border-slate-200 bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-950 p-6 md:p-8 text-white shadow-xl relative overflow-hidden">

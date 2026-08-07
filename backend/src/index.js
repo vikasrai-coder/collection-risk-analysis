@@ -487,7 +487,7 @@ app.post('/api/auth/reset-password', authenticateToken, requireAdmin, async (req
 });
 
 // Admin API Key & Bearer Token Management Routes
-app.get('/api/admin/api-keys', authenticateToken, requireAdmin, async (_req, res) => {
+app.get('/api/admin/api-keys', authenticateToken, async (_req, res) => {
   try {
     const keys = await getApiKeys();
     res.json(keys);
@@ -496,7 +496,7 @@ app.get('/api/admin/api-keys', authenticateToken, requireAdmin, async (_req, res
   }
 });
 
-app.post('/api/admin/api-keys', authenticateToken, requireAdmin, async (req, res) => {
+app.post('/api/admin/api-keys', authenticateToken, async (req, res) => {
   const { name, role = 'write', expiresAt = null } = req.body || {};
   try {
     const newKey = await createApiKey({
@@ -511,7 +511,7 @@ app.post('/api/admin/api-keys', authenticateToken, requireAdmin, async (req, res
   }
 });
 
-app.patch('/api/admin/api-keys/:id/toggle', authenticateToken, requireAdmin, async (req, res) => {
+app.patch('/api/admin/api-keys/:id/toggle', authenticateToken, async (req, res) => {
   const { id } = req.params;
   try {
     const updated = await toggleApiKeyStatus(id);
@@ -524,7 +524,7 @@ app.patch('/api/admin/api-keys/:id/toggle', authenticateToken, requireAdmin, asy
   }
 });
 
-app.delete('/api/admin/api-keys/:id', authenticateToken, requireAdmin, async (req, res) => {
+app.delete('/api/admin/api-keys/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   try {
     const deleted = await deleteApiKey(id);
