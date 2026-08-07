@@ -28,9 +28,18 @@ import {
   ArrowLeft,
   History,
   RotateCcw,
+  Copy,
+  Code,
+  Terminal,
+  ShieldCheck,
+  Trash2,
+  Eye,
+  EyeOff,
+  Play,
+  RefreshCw,
 } from "lucide-react";
 
-type Page = "dashboard" | "followup" | "records" | "upload" | "users" | "reminders";
+type Page = "dashboard" | "followup" | "records" | "upload" | "users" | "reminders" | "api";
 
 type RemarkEntry = {
   id: string;
@@ -1355,6 +1364,128 @@ function App() {
       fetchUsers();
     }
   }, [activePage, user]);
+
+  // API Key & Token Management States
+  const [apiKeys, setApiKeys] = useState<any[]>([]);
+  const [isLoadingApiKeys, setIsLoadingApiKeys] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState("");
+  const [showCreateKeyModal, setShowCreateKeyModal] = useState(false);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [newKeyRole, setNewKeyRole] = useState("write");
+  const [newKeyExpiresAt, setNewKeyExpiresAt] = useState("");
+  const [createdKeyData, setCreatedKeyData] = useState<any | null>(null);
+  const [visibleTokens, setVisibleTokens] = useState<Record<string, boolean>>({});
+  const [apiActiveSubTab, setApiActiveSubTab] = useState<"keys" | "tester" | "docs">("keys");
+
+  // Interactive API Tester State
+  const [testerEndpoint, setTesterEndpoint] = useState<"ping" | "records" | "create_record" | "update_status" | "analytics">("ping");
+  const [testerSelectedKey, setTesterSelectedKey] = useState<string>("");
+  const [testerParams, setTesterParams] = useState({
+    search: "",
+    lender: "",
+    status: "",
+    limit: "10",
+    customerName: "Acme Enterprises",
+    loanAmount: "100000",
+    defaultAmount: "25000",
+    recordStatus: "Overdue",
+    callStatus: "Pending",
+    remark: "External system test entry",
+    recordId: "",
+    updateCallStatus: "Promise To Pay",
+    updateRemark: "Payment promised by client for Friday",
+    updateFollowUpDate: "2026-08-15"
+  });
+  const [testerResponse, setTesterResponse] = useState<any | null>(null);
+  const [isTestingApi, setIsTestingApi] = useState(false);
+
+  const fetchApiKeys = useCallback(async () => {
+    if (!token || user?.role !== "admin") return;
+    setIsLoadingApiKeys(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/admin/api-keys`, {
+        headers: getAuthHeader()
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setApiKeys(data);
+        if (data.length > 0 && !testerSelectedKey) {
+          setTesterSelectedKey(data[0].token || data[0].key);
+        }
+      }
+    } catch (err: any) {
+      setApiKeyError(err.message);
+    } finally {
+      setIsLoadingApiKeys(false);
+    }
+  }, [token, user, testerSelectedKey]);
+
+  useEffect(() => {
+    if (activePage === "api" && user?.role === "admin") {
+      fetchApiKeys();
+    }
+  }, [activePage, user, fetchApiKeys]);
+
+  const handleCreateApiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newKeyName.trim()) return;
+    setApiKeyError("");
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/admin/api-keys`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeader()
+        },
+        body: JSON.stringify({
+          name: newKeyName.trim(),
+          role: newKeyRole,
+          expiresAt: newKeyExpiresAt || null
+        })
+      });
+      if (res.ok) {
+        const newKey = await res.json();
+        setCreatedKeyData(newKey);
+        setNewKeyName("");
+        setNewKeyExpiresAt("");
+        fetchApiKeys();
+      } else {
+        const errData = await res.json();
+        setApiKeyError(errData.message || "Failed to create API key");
+      }
+    } catch (err: any) {
+      setApiKeyError(err.message);
+    }
+  };
+
+  const handleToggleApiKey = async (id: string) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/admin/api-keys/${id}/toggle`, {
+        method: "PATCH",
+        headers: getAuthHeader()
+      });
+      if (res.ok) {
+        fetchApiKeys();
+      }
+    } catch (err: any) {
+      console.error("Toggle key failed:", err);
+    }
+  };
+
+  const handleDeleteApiKey = async (id: string) => {
+    if (!confirm("Are you sure you want to revoke/delete this API key? External applications using this key will immediately lose access.")) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/admin/api-keys/${id}`, {
+        method: "DELETE",
+        headers: getAuthHeader()
+      });
+      if (res.ok) {
+        fetchApiKeys();
+      }
+    } catch (err: any) {
+      console.error("Delete key failed:", err);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -2697,7 +2828,12 @@ function App() {
     { key: "reminders", label: "Reminders", icon: BellRing },
     { key: "records", label: "Records", icon: FileSpreadsheet },
     { key: "upload", label: "Upload", icon: Upload },
-    ...(user?.role === "admin" ? [{ key: "users" as Page, label: "Users", icon: Users }] : []),
+    ...(user?.role === "admin"
+      ? [
+          { key: "users" as Page, label: "Users", icon: Users },
+          { key: "api" as Page, label: "API & Keys", icon: Key },
+        ]
+      : []),
   ];
 
   if (!token || !user) {
@@ -3044,7 +3180,8 @@ function App() {
                             records: "All Records",
                             upload: "Spreadsheet Upload",
                             users: "Operator Registry",
-                            reminders: "Reminders Queue"
+                            reminders: "Reminders Queue",
+                            api: "API & Keys Portal"
                           };
                           const pageLabel = pageNames[usr.activePage] || usr.activePage;
                           
@@ -4924,6 +5061,711 @@ function App() {
                     </Panel>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {activePage === "api" && user?.role === "admin" && (
+              <div className="space-y-6 animate-fade-in">
+                {/* Top Header Banner */}
+                <div className="rounded-3xl border border-slate-200 bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-950 p-6 md:p-8 text-white shadow-xl relative overflow-hidden">
+                  <div className="absolute right-[-10%] top-[-20%] h-64 w-64 rounded-full bg-cyan-500/10 blur-3xl pointer-events-none" />
+                  <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full bg-cyan-500/20 px-3 py-1 text-xs font-bold uppercase tracking-wider text-cyan-300 border border-cyan-500/30">
+                          Developer Portal & REST API
+                        </span>
+                        <span className="rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-bold text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                          <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+                          v1 REST Live
+                        </span>
+                      </div>
+                      <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight">API Key & Token Management</h2>
+                      <p className="text-slate-300 text-sm max-w-2xl leading-relaxed">
+                        Generate secure public API Keys and secret Bearer Tokens to integrate your custom solutions, CRMs, webhooks, and mobile applications with the Collection Risk Analysis System.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => setShowCreateKeyModal(true)}
+                        className="flex items-center gap-2 rounded-2xl bg-cyan-400 px-5 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-400/25 hover:bg-cyan-300 active:scale-95 transition"
+                      >
+                        <Plus className="h-4 w-4" />
+                        <span>Generate New API Key</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Metrics Row */}
+                  <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 border-t border-slate-700/60 pt-6">
+                    <div>
+                      <span className="text-xs text-slate-400 font-medium uppercase tracking-wider block">Total Keys</span>
+                      <span className="text-2xl font-black text-white mt-1 block">{apiKeys.length}</span>
+                    </div>
+                    <div>
+                      <span className="text-xs text-slate-400 font-medium uppercase tracking-wider block">Active Keys</span>
+                      <span className="text-2xl font-black text-emerald-400 mt-1 block">{apiKeys.filter(k => k.isActive).length}</span>
+                    </div>
+                    <div>
+                      <span className="text-xs text-slate-400 font-medium uppercase tracking-wider block">Disabled Keys</span>
+                      <span className="text-2xl font-black text-rose-400 mt-1 block">{apiKeys.filter(k => !k.isActive).length}</span>
+                    </div>
+                    <div>
+                      <span className="text-xs text-slate-400 font-medium uppercase tracking-wider block">API Protocol</span>
+                      <span className="text-2xl font-black text-cyan-400 mt-1 block">HTTPS REST</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sub Navigation Tabs */}
+                <div className="flex border-b border-slate-200 gap-2 bg-white px-4 pt-2 rounded-2xl shadow-sm">
+                  <button
+                    onClick={() => setApiActiveSubTab("keys")}
+                    className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-bold transition ${
+                      apiActiveSubTab === "keys"
+                        ? "border-cyan-500 text-cyan-600"
+                        : "border-transparent text-slate-500 hover:text-slate-900"
+                    }`}
+                  >
+                    <Key className="h-4 w-4" />
+                    <span>API Keys & Secret Tokens</span>
+                  </button>
+                  <button
+                    onClick={() => setApiActiveSubTab("tester")}
+                    className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-bold transition ${
+                      apiActiveSubTab === "tester"
+                        ? "border-cyan-500 text-cyan-600"
+                        : "border-transparent text-slate-500 hover:text-slate-900"
+                    }`}
+                  >
+                    <Terminal className="h-4 w-4" />
+                    <span>Interactive API Playground</span>
+                  </button>
+                  <button
+                    onClick={() => setApiActiveSubTab("docs")}
+                    className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-bold transition ${
+                      apiActiveSubTab === "docs"
+                        ? "border-cyan-500 text-cyan-600"
+                        : "border-transparent text-slate-500 hover:text-slate-900"
+                    }`}
+                  >
+                    <Code className="h-4 w-4" />
+                    <span>Integration Docs & Code Snippets</span>
+                  </button>
+                </div>
+
+                {/* SUB-TAB 1: API Keys List */}
+                {apiActiveSubTab === "keys" && (
+                  <Panel title="Configured API Credentials" subtitle="Manage keys, toggle active status, or revoke tokens">
+                    {apiKeyError && (
+                      <div className="mb-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-500">
+                        {apiKeyError}
+                      </div>
+                    )}
+
+                    {isLoadingApiKeys ? (
+                      <div className="py-12 text-center text-slate-400 flex items-center justify-center gap-2">
+                        <RefreshCw className="h-5 w-5 animate-spin text-cyan-500" />
+                        <span>Loading API keys...</span>
+                      </div>
+                    ) : apiKeys.length === 0 ? (
+                      <div className="py-12 text-center space-y-4">
+                        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-cyan-50 text-cyan-600">
+                          <Key className="h-8 w-8" />
+                        </div>
+                        <div className="space-y-1">
+                          <h3 className="text-lg font-bold text-slate-800">No API Keys Generated Yet</h3>
+                          <p className="text-sm text-slate-500 max-w-md mx-auto">
+                            Create your first API Key and Bearer Token to allow external applications to interface with your collection risk data.
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setShowCreateKeyModal(true)}
+                          className="inline-flex items-center gap-2 rounded-2xl bg-cyan-400 px-5 py-2.5 text-sm font-bold text-slate-950 shadow-md hover:bg-cyan-300 transition"
+                        >
+                          <Plus className="h-4 w-4" />
+                          <span>Create API Key</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm border-collapse">
+                          <thead>
+                            <tr className="border-b border-slate-200 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                              <th className="py-3 px-4">Key Name & ID</th>
+                              <th className="py-3 px-4">API Key & Bearer Secret Token</th>
+                              <th className="py-3 px-4">Scope</th>
+                              <th className="py-3 px-4">Created By / Date</th>
+                              <th className="py-3 px-4">Last Used</th>
+                              <th className="py-3 px-4">Status</th>
+                              <th className="py-3 px-4 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {apiKeys.map((keyObj) => {
+                              const isTokenVisible = !!visibleTokens[keyObj.id];
+                              const copyKeyToClipboard = (text: string, label: string) => {
+                                navigator.clipboard.writeText(text);
+                                alert(`Copied ${label} to clipboard!`);
+                              };
+
+                              return (
+                                <tr key={keyObj.id} className="hover:bg-slate-50/80 transition">
+                                  <td className="py-4 px-4 font-semibold text-slate-900">
+                                    <div className="flex items-center gap-2">
+                                      <Key className="h-4 w-4 text-cyan-600" />
+                                      <span>{keyObj.name}</span>
+                                    </div>
+                                    <div className="text-[11px] font-mono text-slate-400 mt-0.5">{keyObj.id}</div>
+                                  </td>
+
+                                  <td className="py-4 px-4 font-mono text-xs">
+                                    <div className="space-y-2">
+                                      {/* Public API Key */}
+                                      <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 w-fit">
+                                        <span className="text-slate-500 font-sans font-bold text-[10px] uppercase">Key:</span>
+                                        <span className="text-slate-800 font-semibold">{keyObj.key}</span>
+                                        <button
+                                          onClick={() => copyKeyToClipboard(keyObj.key, "API Key")}
+                                          className="text-slate-400 hover:text-cyan-600 p-1"
+                                          title="Copy API Key"
+                                        >
+                                          <Copy className="h-3.5 w-3.5" />
+                                        </button>
+                                      </div>
+
+                                      {/* Secret Bearer Token */}
+                                      <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 w-fit">
+                                        <span className="text-slate-500 font-sans font-bold text-[10px] uppercase">Token:</span>
+                                        <span className="text-slate-800 font-semibold">
+                                          {isTokenVisible
+                                            ? keyObj.token
+                                            : `${keyObj.token.slice(0, 8)}••••••••••••••••••••`}
+                                        </span>
+                                        <button
+                                          onClick={() =>
+                                            setVisibleTokens((prev) => ({
+                                              ...prev,
+                                              [keyObj.id]: !prev[keyObj.id],
+                                            }))
+                                          }
+                                          className="text-slate-400 hover:text-slate-700 p-1"
+                                          title={isTokenVisible ? "Hide Token" : "Show Token"}
+                                        >
+                                          {isTokenVisible ? (
+                                            <EyeOff className="h-3.5 w-3.5" />
+                                          ) : (
+                                            <Eye className="h-3.5 w-3.5" />
+                                          )}
+                                        </button>
+                                        <button
+                                          onClick={() => copyKeyToClipboard(keyObj.token, "Bearer Token")}
+                                          className="text-slate-400 hover:text-cyan-600 p-1"
+                                          title="Copy Secret Bearer Token"
+                                        >
+                                          <Copy className="h-3.5 w-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </td>
+
+                                  <td className="py-4 px-4">
+                                    <span className="rounded-full bg-slate-100 border border-slate-200 px-2.5 py-1 text-xs font-bold text-slate-700 uppercase">
+                                      {keyObj.role || "write"}
+                                    </span>
+                                  </td>
+
+                                  <td className="py-4 px-4 text-xs text-slate-500">
+                                    <div className="font-medium text-slate-700">{keyObj.createdBy}</div>
+                                    <div>{formatDate(keyObj.createdAt)}</div>
+                                  </td>
+
+                                  <td className="py-4 px-4 text-xs text-slate-500">
+                                    {keyObj.lastUsedAt ? formatDate(keyObj.lastUsedAt) : <span className="text-slate-400 italic">Never</span>}
+                                  </td>
+
+                                  <td className="py-4 px-4">
+                                    <span
+                                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ${
+                                        keyObj.isActive
+                                          ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                                          : "bg-rose-100 text-rose-800 border border-rose-200"
+                                      }`}
+                                    >
+                                      <span className={`h-1.5 w-1.5 rounded-full ${keyObj.isActive ? "bg-emerald-500 animate-pulse" : "bg-rose-500"}`} />
+                                      {keyObj.isActive ? "Active" : "Disabled"}
+                                    </span>
+                                  </td>
+
+                                  <td className="py-4 px-4 text-right space-x-2">
+                                    <button
+                                      onClick={() => handleToggleApiKey(keyObj.id)}
+                                      className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-100 transition"
+                                      title={keyObj.isActive ? "Disable Key" : "Enable Key"}
+                                    >
+                                      {keyObj.isActive ? "Disable" : "Enable"}
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteApiKey(keyObj.id)}
+                                      className="rounded-xl border border-rose-200 bg-rose-50/50 px-3 py-1.5 text-xs font-bold text-rose-600 hover:bg-rose-100 transition"
+                                      title="Revoke / Delete Key"
+                                    >
+                                      Revoke
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </Panel>
+                )}
+
+                {/* SUB-TAB 2: Interactive Playground / API Tester */}
+                {apiActiveSubTab === "tester" && (
+                  <div className="grid gap-6 lg:grid-cols-12">
+                    {/* Request Controls (5 cols) */}
+                    <div className="lg:col-span-5 space-y-6">
+                      <Panel title="API Request Builder" subtitle="Test REST API endpoints directly in real-time">
+                        <div className="space-y-4">
+                          <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                              Target API Endpoint
+                            </label>
+                            <select
+                              value={testerEndpoint}
+                              onChange={(e: any) => setTesterEndpoint(e.target.value)}
+                              className="w-full h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-800 outline-none focus:border-cyan-500 focus:bg-white"
+                            >
+                              <option value="ping">GET /api/external/v1/ping (Health Check)</option>
+                              <option value="records">GET /api/external/v1/records (List Records)</option>
+                              <option value="create_record">POST /api/external/v1/records (Push New Record)</option>
+                              <option value="update_status">PUT /api/external/v1/records/:id/status (Update Status & Remark)</option>
+                              <option value="analytics">GET /api/external/v1/analytics (Metrics & Stats)</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                              Select Authentication API Key / Token
+                            </label>
+                            <select
+                              value={testerSelectedKey}
+                              onChange={(e) => setTesterSelectedKey(e.target.value)}
+                              className="w-full h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-mono text-slate-800 outline-none focus:border-cyan-500 focus:bg-white"
+                            >
+                              {apiKeys.map((k) => (
+                                <option key={k.id} value={k.token || k.key}>
+                                  {k.name} ({k.key})
+                                </option>
+                              ))}
+                              {apiKeys.length === 0 && <option value="">No keys available (Generate one first)</option>}
+                            </select>
+                          </div>
+
+                          {/* Conditional Inputs based on endpoint */}
+                          {testerEndpoint === "records" && (
+                            <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                              <span className="text-xs font-bold text-slate-600 uppercase">Query Parameters</span>
+                              <input
+                                type="text"
+                                placeholder="Search term (customer, loanId, mobile)"
+                                value={testerParams.search}
+                                onChange={(e) => setTesterParams((p) => ({ ...p, search: e.target.value }))}
+                                className="w-full h-9 rounded-xl border border-slate-200 px-3 text-xs bg-white"
+                              />
+                              <input
+                                type="text"
+                                placeholder="Filter by Lender"
+                                value={testerParams.lender}
+                                onChange={(e) => setTesterParams((p) => ({ ...p, lender: e.target.value }))}
+                                className="w-full h-9 rounded-xl border border-slate-200 px-3 text-xs bg-white"
+                              />
+                            </div>
+                          )}
+
+                          {testerEndpoint === "create_record" && (
+                            <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                              <span className="text-xs font-bold text-slate-600 uppercase">New Record Payload</span>
+                              <input
+                                type="text"
+                                placeholder="Customer Name"
+                                value={testerParams.customerName}
+                                onChange={(e) => setTesterParams((p) => ({ ...p, customerName: e.target.value }))}
+                                className="w-full h-9 rounded-xl border border-slate-200 px-3 text-xs bg-white"
+                              />
+                              <div className="grid grid-cols-2 gap-2">
+                                <input
+                                  type="number"
+                                  placeholder="Loan Amount"
+                                  value={testerParams.loanAmount}
+                                  onChange={(e) => setTesterParams((p) => ({ ...p, loanAmount: e.target.value }))}
+                                  className="w-full h-9 rounded-xl border border-slate-200 px-3 text-xs bg-white"
+                                />
+                                <input
+                                  type="number"
+                                  placeholder="Default Amount"
+                                  value={testerParams.defaultAmount}
+                                  onChange={(e) => setTesterParams((p) => ({ ...p, defaultAmount: e.target.value }))}
+                                  className="w-full h-9 rounded-xl border border-slate-200 px-3 text-xs bg-white"
+                                />
+                              </div>
+                              <input
+                                type="text"
+                                placeholder="Initial Remark"
+                                value={testerParams.remark}
+                                onChange={(e) => setTesterParams((p) => ({ ...p, remark: e.target.value }))}
+                                className="w-full h-9 rounded-xl border border-slate-200 px-3 text-xs bg-white"
+                              />
+                            </div>
+                          )}
+
+                          {testerEndpoint === "update_status" && (
+                            <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                              <span className="text-xs font-bold text-slate-600 uppercase">Target Record & Status</span>
+                              <input
+                                type="text"
+                                placeholder="Record ID or Loan ID (e.g. LN-20411)"
+                                value={testerParams.recordId}
+                                onChange={(e) => setTesterParams((p) => ({ ...p, recordId: e.target.value }))}
+                                className="w-full h-9 rounded-xl border border-slate-200 px-3 text-xs bg-white font-mono"
+                              />
+                              <select
+                                value={testerParams.updateCallStatus}
+                                onChange={(e) => setTesterParams((p) => ({ ...p, updateCallStatus: e.target.value }))}
+                                className="w-full h-9 rounded-xl border border-slate-200 px-3 text-xs bg-white"
+                              >
+                                <option value="Pending">Pending</option>
+                                <option value="Promise To Pay">Promise To Pay</option>
+                                <option value="Payment Done">Payment Done</option>
+                                <option value="RNR">RNR (Ring No Response)</option>
+                                <option value="Switched Off">Switched Off</option>
+                              </select>
+                              <input
+                                type="text"
+                                placeholder="Remark text"
+                                value={testerParams.updateRemark}
+                                onChange={(e) => setTesterParams((p) => ({ ...p, updateRemark: e.target.value }))}
+                                className="w-full h-9 rounded-xl border border-slate-200 px-3 text-xs bg-white"
+                              />
+                            </div>
+                          )}
+
+                          <button
+                            onClick={async () => {
+                              if (!testerSelectedKey) {
+                                alert("Please select or generate an API Key first.");
+                                return;
+                              }
+                              setIsTestingApi(true);
+                              setTesterResponse(null);
+                              try {
+                                let url = `${API_BASE_URL}/api/external/v1/${testerEndpoint}`;
+                                let options: any = {
+                                  headers: {
+                                    "x-api-key": testerSelectedKey,
+                                    "Content-Type": "application/json"
+                                  }
+                                };
+
+                                if (testerEndpoint === "records") {
+                                  const params = new URLSearchParams();
+                                  if (testerParams.search) params.append("search", testerParams.search);
+                                  if (testerParams.lender) params.append("lender", testerParams.lender);
+                                  if (testerParams.limit) params.append("limit", testerParams.limit);
+                                  url += `?${params.toString()}`;
+                                } else if (testerEndpoint === "create_record") {
+                                  options.method = "POST";
+                                  options.body = JSON.stringify({
+                                    customerName: testerParams.customerName,
+                                    loanAmount: Number(testerParams.loanAmount),
+                                    defaultAmount: Number(testerParams.defaultAmount),
+                                    remark: testerParams.remark,
+                                    status: testerParams.recordStatus,
+                                    callStatus: testerParams.callStatus
+                                  });
+                                } else if (testerEndpoint === "update_status") {
+                                  if (!testerParams.recordId) {
+                                    alert("Please enter a Target Record ID or Loan ID");
+                                    setIsTestingApi(false);
+                                    return;
+                                  }
+                                  url = `${API_BASE_URL}/api/external/v1/records/${encodeURIComponent(testerParams.recordId)}/status`;
+                                  options.method = "PUT";
+                                  options.body = JSON.stringify({
+                                    callStatus: testerParams.updateCallStatus,
+                                    remark: testerParams.updateRemark,
+                                    followUpDate: testerParams.updateFollowUpDate
+                                  });
+                                }
+
+                                const res = await fetch(url, options);
+                                const data = await res.json();
+                                setTesterResponse({ status: res.status, data });
+                              } catch (err: any) {
+                                setTesterResponse({ status: 500, data: { error: err.message } });
+                              } finally {
+                                setIsTestingApi(false);
+                              }
+                            }}
+                            disabled={isTestingApi}
+                            className="w-full flex items-center justify-center gap-2 rounded-2xl bg-cyan-500 py-3 text-sm font-bold text-slate-950 shadow-md hover:bg-cyan-400 active:scale-95 transition disabled:opacity-50"
+                          >
+                            {isTestingApi ? (
+                              <>
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                                <span>Executing Request...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Play className="h-4 w-4 fill-current" />
+                                <span>Execute Live Test Request</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </Panel>
+                    </div>
+
+                    {/* Response & Snippets View (7 cols) */}
+                    <div className="lg:col-span-7 space-y-6">
+                      <Panel title="API Response Payload" subtitle="Real-time server JSON response">
+                        {testerResponse ? (
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                                HTTP Response Status
+                              </span>
+                              <span
+                                className={`rounded-full px-3 py-0.5 text-xs font-mono font-bold ${
+                                  testerResponse.status >= 200 && testerResponse.status < 300
+                                    ? "bg-emerald-100 text-emerald-800"
+                                    : "bg-rose-100 text-rose-800"
+                                }`}
+                              >
+                                HTTP {testerResponse.status}
+                              </span>
+                            </div>
+                            <pre className="max-h-[420px] overflow-y-auto rounded-2xl bg-slate-950 p-4 text-xs font-mono text-cyan-300 leading-relaxed border border-slate-800">
+                              {JSON.stringify(testerResponse.data, null, 2)}
+                            </pre>
+                          </div>
+                        ) : (
+                          <div className="py-20 text-center text-slate-400 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                            <Terminal className="h-10 w-10 mx-auto text-slate-300 mb-2" />
+                            <p className="text-sm font-medium text-slate-600">No Request Sent Yet</p>
+                            <p className="text-xs text-slate-400 mt-1">Select an endpoint and click "Execute Live Test Request"</p>
+                          </div>
+                        )}
+                      </Panel>
+                    </div>
+                  </div>
+                )}
+
+                {/* SUB-TAB 3: Documentation View */}
+                {apiActiveSubTab === "docs" && (
+                  <Panel title="Developer Documentation & Endpoints Specification" subtitle="Quick reference guide for external integration">
+                    <div className="space-y-8 text-slate-800 text-sm leading-relaxed">
+                      {/* Auth Header Spec */}
+                      <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 space-y-3">
+                        <h4 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                          <ShieldCheck className="h-5 w-5 text-cyan-600" />
+                          <span>Authentication Headers</span>
+                        </h4>
+                        <p className="text-slate-600">
+                          Pass your API key or Bearer Token in every HTTP request header. Both formats are fully supported:
+                        </p>
+                        <div className="grid md:grid-cols-2 gap-4 font-mono text-xs">
+                          <div className="bg-white p-3 rounded-xl border border-slate-200">
+                            <span className="text-slate-400 block text-[10px] font-sans font-bold uppercase">Option A: Custom Header</span>
+                            <span className="text-cyan-700 font-bold">x-api-key: YOUR_API_KEY</span>
+                          </div>
+                          <div className="bg-white p-3 rounded-xl border border-slate-200">
+                            <span className="text-slate-400 block text-[10px] font-sans font-bold uppercase">Option B: Standard Bearer Token</span>
+                            <span className="text-cyan-700 font-bold">Authorization: Bearer YOUR_BEARER_TOKEN</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Endpoints List */}
+                      <div className="space-y-4">
+                        <h4 className="text-base font-bold text-slate-900">Supported REST Endpoints</h4>
+                        
+                        <div className="divide-y divide-slate-200 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                          <div className="p-4 space-y-2">
+                            <div className="flex items-center gap-3">
+                              <span className="rounded-lg bg-emerald-100 text-emerald-800 text-xs font-mono font-bold px-2.5 py-1">GET</span>
+                              <span className="font-mono text-sm font-bold text-slate-900">/api/external/v1/ping</span>
+                            </div>
+                            <p className="text-xs text-slate-600">Health check endpoint to verify connectivity and validate your API key.</p>
+                          </div>
+
+                          <div className="p-4 space-y-2">
+                            <div className="flex items-center gap-3">
+                              <span className="rounded-lg bg-emerald-100 text-emerald-800 text-xs font-mono font-bold px-2.5 py-1">GET</span>
+                              <span className="font-mono text-sm font-bold text-slate-900">/api/external/v1/records</span>
+                            </div>
+                            <p className="text-xs text-slate-600">Fetch collection records. Query params: <code className="text-cyan-700 font-bold">search</code>, <code className="text-cyan-700 font-bold">lender</code>, <code className="text-cyan-700 font-bold">status</code>, <code className="text-cyan-700 font-bold">limit</code>, <code className="text-cyan-700 font-bold">offset</code>.</p>
+                          </div>
+
+                          <div className="p-4 space-y-2">
+                            <div className="flex items-center gap-3">
+                              <span className="rounded-lg bg-cyan-100 text-cyan-800 text-xs font-mono font-bold px-2.5 py-1">POST</span>
+                              <span className="font-mono text-sm font-bold text-slate-900">/api/external/v1/records</span>
+                            </div>
+                            <p className="text-xs text-slate-600">Insert new loan default record. JSON Body parameters: <code className="text-cyan-700">customerName</code>, <code className="text-cyan-700">loanAmount</code>, <code className="text-cyan-700">defaultAmount</code>, <code className="text-cyan-700">lender</code>, <code className="text-cyan-700">mobile</code>, <code className="text-cyan-700">remark</code>.</p>
+                          </div>
+
+                          <div className="p-4 space-y-2">
+                            <div className="flex items-center gap-3">
+                              <span className="rounded-lg bg-amber-100 text-amber-800 text-xs font-mono font-bold px-2.5 py-1">PUT</span>
+                              <span className="font-mono text-sm font-bold text-slate-900">/api/external/v1/records/:id/status</span>
+                            </div>
+                            <p className="text-xs text-slate-600">Update call status, add remark history, or record partial settlement. Body: <code className="text-cyan-700">callStatus</code>, <code className="text-cyan-700">remark</code>, <code className="text-cyan-700">followUpDate</code>, <code className="text-cyan-700">partialPaymentAmount</code>.</p>
+                          </div>
+
+                          <div className="p-4 space-y-2">
+                            <div className="flex items-center gap-3">
+                              <span className="rounded-lg bg-emerald-100 text-emerald-800 text-xs font-mono font-bold px-2.5 py-1">GET</span>
+                              <span className="font-mono text-sm font-bold text-slate-900">/api/external/v1/analytics</span>
+                            </div>
+                            <p className="text-xs text-slate-600">Retrieve system-wide summary metrics (total default amount, pending count, recovery rate).</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </Panel>
+                )}
+
+                {/* CREATE API KEY MODAL */}
+                {showCreateKeyModal && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4 animate-fade-in">
+                    <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl space-y-6 border border-slate-200">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-cyan-100 text-cyan-700">
+                            <Key className="h-5 w-5" />
+                          </div>
+                          <div>
+                            <h3 className="text-lg font-bold text-slate-900">Generate New API Key</h3>
+                            <p className="text-xs text-slate-500">Create credentials for external integration</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setShowCreateKeyModal(false);
+                            setCreatedKeyData(null);
+                          }}
+                          className="text-slate-400 hover:text-slate-600 p-1"
+                        >
+                          <X className="h-5 w-5" />
+                        </button>
+                      </div>
+
+                      {createdKeyData ? (
+                        <div className="space-y-4">
+                          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-emerald-800 text-xs space-y-1">
+                            <span className="font-bold block text-emerald-900">✅ API Key & Secret Bearer Token Generated!</span>
+                            <span>Copy these keys now. Your secret token will be masked in the list view.</span>
+                          </div>
+
+                          <div className="space-y-3 font-mono text-xs">
+                            <div>
+                              <label className="text-[10px] font-sans font-bold text-slate-500 uppercase block mb-1">Public API Key</label>
+                              <div className="flex items-center gap-2 bg-slate-100 p-3 rounded-xl border border-slate-200">
+                                <span className="text-slate-900 font-bold truncate flex-1">{createdKeyData.key}</span>
+                                <button
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(createdKeyData.key);
+                                    alert("API Key copied to clipboard!");
+                                  }}
+                                  className="rounded-lg bg-white px-3 py-1.5 font-sans text-xs font-bold text-slate-700 border border-slate-200 hover:bg-slate-50"
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="text-[10px] font-sans font-bold text-slate-500 uppercase block mb-1">Secret Bearer Token</label>
+                              <div className="flex items-center gap-2 bg-slate-100 p-3 rounded-xl border border-slate-200">
+                                <span className="text-slate-900 font-bold truncate flex-1">{createdKeyData.token}</span>
+                                <button
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(createdKeyData.token);
+                                    alert("Bearer Token copied to clipboard!");
+                                  }}
+                                  className="rounded-lg bg-cyan-400 px-3 py-1.5 font-sans text-xs font-bold text-slate-950 shadow-sm hover:bg-cyan-300"
+                                >
+                                  Copy Token
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              setShowCreateKeyModal(false);
+                              setCreatedKeyData(null);
+                            }}
+                            className="w-full rounded-2xl bg-slate-900 py-3 text-sm font-bold text-white hover:bg-slate-800 transition"
+                          >
+                            Done / Close Modal
+                          </button>
+                        </div>
+                      ) : (
+                        <form onSubmit={handleCreateApiKey} className="space-y-4">
+                          <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                              Key Name / Integration Title
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={newKeyName}
+                              onChange={(e) => setNewKeyName(e.target.value)}
+                              placeholder="e.g. Vikas Mobile Solution / CRM Sync"
+                              className="w-full h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm outline-none focus:border-cyan-500 focus:bg-white"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                              Access Scope / Permission
+                            </label>
+                            <select
+                              value={newKeyRole}
+                              onChange={(e) => setNewKeyRole(e.target.value)}
+                              className="w-full h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold outline-none focus:border-cyan-500 focus:bg-white"
+                            >
+                              <option value="write">Write & Read Access (Standard)</option>
+                              <option value="read">Read Only</option>
+                              <option value="admin">Full Admin Access</option>
+                            </select>
+                          </div>
+
+                          <div className="flex gap-3 pt-2">
+                            <button
+                              type="button"
+                              onClick={() => setShowCreateKeyModal(false)}
+                              className="flex-1 rounded-2xl border border-slate-200 py-3 text-sm font-bold text-slate-600 hover:bg-slate-50 transition"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="submit"
+                              className="flex-1 rounded-2xl bg-cyan-400 py-3 text-sm font-bold text-slate-950 shadow-md hover:bg-cyan-300 transition"
+                            >
+                              Generate Key
+                            </button>
+                          </div>
+                        </form>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

@@ -39,3 +39,4 @@ bun.lockb
 package-lock.json
 .vercel
 .env*.local
+scratch/

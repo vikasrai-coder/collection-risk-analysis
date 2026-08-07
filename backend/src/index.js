@@ -10,6 +10,7 @@ import { ensureSchema } from './utils/schema.js';
 import { getDatabaseStatus, query } from './utils/database.js';
 import { createClient } from '@supabase/supabase-js';
 import { findUserByEmail, createUser, getAllUsers, updateUserPassword } from './utils/auth.js';
+import { getApiKeys, createApiKey, toggleApiKeyStatus, deleteApiKey, validateApiKeyOrToken } from './utils/apiKeys.js';
 
 dotenv.config();
 
@@ -340,6 +341,37 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+// API Key & Token Middleware for External REST Integration
+async function authenticateApiKey(req, res, next) {
+  const apiKeyHeader = req.headers['x-api-key'];
+  const authHeader = req.headers['authorization'];
+  let tokenVal = apiKeyHeader;
+
+  if (!tokenVal && authHeader && authHeader.startsWith('Bearer ')) {
+    tokenVal = authHeader.substring(7).trim();
+  }
+
+  if (!tokenVal) {
+    return res.status(401).json({
+      ok: false,
+      error: 'Authentication required',
+      message: 'Missing API Key or Bearer Token. Provide header x-api-key: <key> or Authorization: Bearer <token>.'
+    });
+  }
+
+  const validKey = await validateApiKeyOrToken(tokenVal);
+  if (!validKey) {
+    return res.status(403).json({
+      ok: false,
+      error: 'Unauthorized',
+      message: 'Invalid, inactive, or expired API Key or Bearer Token.'
+    });
+  }
+
+  req.apiKey = validKey;
+  next();
+}
+
 app.get('/health', async (_req, res) => {
   try {
     await query('SELECT NOW()');
@@ -451,6 +483,271 @@ app.post('/api/auth/reset-password', authenticateToken, requireAdmin, async (req
     }
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+// Admin API Key & Bearer Token Management Routes
+app.get('/api/admin/api-keys', authenticateToken, requireAdmin, async (_req, res) => {
+  try {
+    const keys = await getApiKeys();
+    res.json(keys);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.post('/api/admin/api-keys', authenticateToken, requireAdmin, async (req, res) => {
+  const { name, role = 'write', expiresAt = null } = req.body || {};
+  try {
+    const newKey = await createApiKey({
+      name,
+      role,
+      createdBy: req.user?.email || 'admin@vikas.raiexp',
+      expiresAt
+    });
+    res.status(201).json(newKey);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.patch('/api/admin/api-keys/:id/toggle', authenticateToken, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const updated = await toggleApiKeyStatus(id);
+    if (!updated) {
+      return res.status(404).json({ message: 'API key not found' });
+    }
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.delete('/api/admin/api-keys/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const deleted = await deleteApiKey(id);
+    if (!deleted) {
+      return res.status(404).json({ message: 'API key not found' });
+    }
+    res.json({ message: 'API key revoked successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// External REST Integration Endpoints (v1)
+app.get('/api/external/v1/ping', authenticateApiKey, async (req, res) => {
+  res.json({
+    ok: true,
+    status: 'online',
+    message: 'Collection Risk Analysis API is active and operational.',
+    authenticatedKey: {
+      id: req.apiKey.id,
+      name: req.apiKey.name,
+      role: req.apiKey.role
+    },
+    serverTime: new Date().toISOString()
+  });
+});
+
+app.get('/api/external/v1/records', authenticateApiKey, async (req, res) => {
+  try {
+    const resDb = await query("SELECT payload FROM app_state WHERE state_key = 'records'");
+    const rawRecords = resDb.rows[0]?.payload || [];
+    let records = cleanupAndResetStaleRecords(rawRecords);
+
+    const { search, lender, status, limit = 100, offset = 0 } = req.query;
+
+    if (search) {
+      const q = String(search).toLowerCase();
+      records = records.filter(r =>
+        (r.customerName && r.customerName.toLowerCase().includes(q)) ||
+        (r.loanId && r.loanId.toLowerCase().includes(q)) ||
+        (r.mobile && r.mobile.includes(q)) ||
+        (r.anchor && r.anchor.toLowerCase().includes(q))
+      );
+    }
+
+    if (lender) {
+      const l = String(lender).toLowerCase();
+      records = records.filter(r => r.lender && r.lender.toLowerCase().includes(l));
+    }
+
+    if (status) {
+      const s = String(status).toLowerCase();
+      records = records.filter(r => r.status && r.status.toLowerCase().includes(s));
+    }
+
+    const total = records.length;
+    const paginated = records.slice(Number(offset), Number(offset) + Number(limit));
+
+    res.json({
+      ok: true,
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+      data: paginated
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.post('/api/external/v1/records', authenticateApiKey, async (req, res) => {
+  const { customerName, loanId, lender, anchor, mobile, loanAmount, defaultAmount, collectionDate, status, callStatus, remark } = req.body || {};
+
+  if (!customerName || !loanAmount) {
+    return res.status(400).json({ ok: false, error: 'customerName and loanAmount are required fields.' });
+  }
+
+  try {
+    const resDb = await query("SELECT payload FROM app_state WHERE state_key = 'records'");
+    const records = resDb.rows[0]?.payload || [];
+
+    const newId = `rec_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const newRecord = {
+      id: newId,
+      userId: `USR-${Math.floor(1000 + Math.random() * 9000)}`,
+      loanId: loanId || `LN-${Math.floor(10000 + Math.random() * 90000)}`,
+      customerName: String(customerName).trim(),
+      lender: lender || 'Muthoot Fincorp Limited',
+      anchor: anchor || '',
+      mobile: mobile || '',
+      alternateNumber: '',
+      category: 'Retail',
+      status: status || 'Overdue',
+      loanAmount: Number(loanAmount) || 0,
+      defaultAmount: Number(defaultAmount) || Number(loanAmount) || 0,
+      collectionDate: collectionDate || new Date().toISOString().slice(0, 10),
+      riskScore: 65,
+      paymentProbability: 50,
+      callStatus: callStatus || 'Pending',
+      remark: remark || 'Inserted via External REST API',
+      remarkHistory: remark ? [{
+        id: `rmk_${Date.now()}`,
+        text: remark,
+        timestamp: new Date().toISOString(),
+        addedBy: `API (${req.apiKey.name})`
+      }] : [],
+      followUpDate: '',
+      reminderEnabled: false,
+      updatedAt: new Date().toISOString(),
+      updatedBy: `API (${req.apiKey.name})`,
+      pendingAmount: Number(defaultAmount) || Number(loanAmount) || 0,
+      partialPaymentSettled: 0
+    };
+
+    records.unshift(newRecord);
+
+    await query(
+      `INSERT INTO app_state (state_key, payload, updated_at)
+       VALUES ('records', $1::jsonb, NOW())
+       ON CONFLICT (state_key)
+       DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()`,
+      [JSON.stringify(records)]
+    );
+
+    res.status(201).json({
+      ok: true,
+      message: 'Record created successfully',
+      record: newRecord
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.put('/api/external/v1/records/:id/status', authenticateApiKey, async (req, res) => {
+  const { id } = req.params;
+  const { callStatus, remark, followUpDate, partialPaymentAmount } = req.body || {};
+
+  try {
+    const resDb = await query("SELECT payload FROM app_state WHERE state_key = 'records'");
+    const records = resDb.rows[0]?.payload || [];
+
+    const index = records.findIndex(r => r.id === id || r.loanId === id);
+    if (index === -1) {
+      return res.status(404).json({ ok: false, error: `Record with id or loanId '${id}' not found.` });
+    }
+
+    const rec = records[index];
+
+    if (callStatus) rec.callStatus = callStatus;
+    if (followUpDate) rec.followUpDate = followUpDate;
+    rec.updatedAt = new Date().toISOString();
+    rec.updatedBy = `API (${req.apiKey.name})`;
+
+    if (remark) {
+      rec.remark = remark;
+      if (!Array.isArray(rec.remarkHistory)) rec.remarkHistory = [];
+      rec.remarkHistory.push({
+        id: `rmk_${Date.now()}`,
+        text: remark,
+        timestamp: new Date().toISOString(),
+        addedBy: `API (${req.apiKey.name})`
+      });
+    }
+
+    if (partialPaymentAmount && Number(partialPaymentAmount) > 0) {
+      const pAmt = Number(partialPaymentAmount);
+      rec.partialPaymentSettled = (rec.partialPaymentSettled || 0) + pAmt;
+      rec.pendingAmount = Math.max(0, (rec.defaultAmount || 0) - rec.partialPaymentSettled);
+    }
+
+    records[index] = rec;
+
+    await query(
+      `INSERT INTO app_state (state_key, payload, updated_at)
+       VALUES ('records', $1::jsonb, NOW())
+       ON CONFLICT (state_key)
+       DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()`,
+      [JSON.stringify(records)]
+    );
+
+    res.json({
+      ok: true,
+      message: 'Record updated successfully',
+      record: rec
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get('/api/external/v1/analytics', authenticateApiKey, async (_req, res) => {
+  try {
+    const resDb = await query("SELECT payload FROM app_state WHERE state_key = 'records'");
+    const records = resDb.rows[0]?.payload || [];
+
+    const totalRecords = records.length;
+    const totalLoanAmount = records.reduce((sum, r) => sum + (r.loanAmount || 0), 0);
+    const totalDefaultAmount = records.reduce((sum, r) => sum + (r.defaultAmount || 0), 0);
+    const totalPendingAmount = records.reduce((sum, r) => sum + (r.pendingAmount || r.defaultAmount || 0), 0);
+    const totalSettledAmount = records.reduce((sum, r) => sum + (r.partialPaymentSettled || 0), 0);
+
+    const paymentDoneCount = records.filter(r => r.callStatus === 'Payment Done' || r.status === 'Closed' || r.status === 'Payment Clear').length;
+    const promiseToPayCount = records.filter(r => r.callStatus === 'Promise To Pay').length;
+    const pendingCount = totalRecords - paymentDoneCount;
+
+    res.json({
+      ok: true,
+      summary: {
+        totalRecords,
+        totalLoanAmount,
+        totalDefaultAmount,
+        totalPendingAmount,
+        totalSettledAmount,
+        paymentDoneCount,
+        promiseToPayCount,
+        pendingCount,
+        recoveryRate: totalDefaultAmount > 0 ? ((totalSettledAmount / totalDefaultAmount) * 100).toFixed(2) + '%' : '0%'
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
