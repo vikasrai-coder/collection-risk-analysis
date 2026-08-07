@@ -13,6 +13,7 @@ import { findUserByEmail, createUser, getAllUsers, updateUserPassword } from './
 import { getApiKeys, createApiKey, toggleApiKeyStatus, deleteApiKey, validateApiKeyOrToken } from './utils/apiKeys.js';
 
 dotenv.config();
+dotenv.config({ path: 'backend/.env' });
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,6 +22,19 @@ const JWT_SECRET = process.env.JWT_SECRET || 'collection-risk-postgres-secret-20
 app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 app.use(morgan('dev'));
+
+let isSchemaEnsured = false;
+app.use(async (_req, _res, next) => {
+  if (!isSchemaEnsured) {
+    try {
+      await ensureSchema();
+      isSchemaEnsured = true;
+    } catch (e) {
+      console.error('Lazy ensureSchema warning:', e.message);
+    }
+  }
+  next();
+});
 
 // Helper to parse collectionDate in different formats robustly
 function parseCollectionDate(collectionDateStr) {
@@ -206,8 +220,8 @@ async function enrichRecordsWithProfiles(records) {
   const profilesMap = new Map();
 
   // 1. Try fetching from Supabase first
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
   if (supabaseUrl && supabaseKey) {
     try {
       const supabase = createClient(supabaseUrl, supabaseKey);

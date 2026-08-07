@@ -4,6 +4,7 @@ import pkg from 'pg';
 import dotenv from 'dotenv';
 
 dotenv.config();
+dotenv.config({ path: 'backend/.env' });
 
 const { Pool } = pkg;
 
@@ -15,8 +16,8 @@ const localPool = new Pool({
 });
 
 // Supabase client
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const supabase = (supabaseUrl && supabaseKey) 
   ? createClient(supabaseUrl, supabaseKey)
   : null;
