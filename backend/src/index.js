@@ -1514,12 +1514,12 @@ app.get('/api/reminders/cron-check', async (req, res) => {
   }
 });
 
-// Check every 1 minute in background (in local environments only, not on Vercel)
-if (!process.env.VERCEL) {
-  setInterval(() => checkAndSendTelegramReminders(false), 1 * 60 * 1000);
-}
+// Check every 1 minute in background (in local standalone server only, not on Vercel)
+const isVercelEnvironment = Boolean(process.env.VERCEL || process.env.VERCEL_ENV || process.env.NOW_REGION);
 
-if (!process.env.VERCEL) {
+if (!isVercelEnvironment) {
+  setInterval(() => checkAndSendTelegramReminders(false), 1 * 60 * 1000);
+
   ensureSchema()
     .then(() => {
       app.listen(PORT, () => {
@@ -1528,7 +1528,6 @@ if (!process.env.VERCEL) {
     })
     .catch((error) => {
       console.error('Backend startup failed:', error.message);
-      process.exit(1);
     });
 }
 
