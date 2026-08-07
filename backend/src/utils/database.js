@@ -15,6 +15,9 @@ const localConnectionString =
 const localPool = new Pool({
   connectionString: localConnectionString,
 });
+localPool.on('error', (err) => {
+  console.warn('Local PG connection error (handled):', err.message);
+});
 
 // Supabase configuration
 const DEFAULT_SUPABASE_URL = 'https://uybeszjzzlfmtlmwuvwu.supabase.co';
@@ -46,7 +49,7 @@ export async function query(text, params) {
 
   // Handle standard state queries
   // SELECT state_key, payload, updated_at FROM app_state WHERE state_key IN ($1, $2)
-  if (text.includes('SELECT') && text.includes('app_state')) {
+  if (text.includes('SELECT payload FROM app_state') || text.includes('FROM app_state')) {
     if (supabase) {
       try {
         let keys = params;
@@ -64,17 +67,18 @@ export async function query(text, params) {
             .select('state_key, payload, updated_at')
             .in('state_key', keys);
           
-          if (!error && data) {
+          if (!error) {
             activeTarget = 'supabase';
+            const safeData = data || [];
             // Map payloads to return expected structure
             if (text.trim().toLowerCase().startsWith('select payload')) {
-              return { rows: data.map(item => ({ payload: item.payload })) };
+              return { rows: safeData.map(item => ({ payload: item.payload })) };
             }
-            return { rows: data };
+            return { rows: safeData };
           }
         }
       } catch (e) {
-        console.error('Supabase fetch failed, falling back to local PG:', e);
+        console.error('Supabase fetch failed:', e);
       }
     }
     

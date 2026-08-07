@@ -14,6 +14,9 @@ const localPool = new Pool({
     process.env.DATABASE_URL ||
     'postgresql://apple@localhost:5432/collection_risk',
 });
+localPool.on('error', (err) => {
+  console.warn('Local PG connection error (handled):', err.message);
+});
 
 // Supabase client
 const DEFAULT_SUPABASE_URL = 'https://uybeszjzzlfmtlmwuvwu.supabase.co';
