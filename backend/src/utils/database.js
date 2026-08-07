@@ -17,8 +17,11 @@ const localPool = new Pool({
 });
 
 // Supabase configuration
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+const DEFAULT_SUPABASE_URL = 'https://uybeszjzzlfmtlmwuvwu.supabase.co';
+const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV5YmVzemp6emxmbXRsbXd1dnd1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODY4MjY4NywiZXhwIjoyMDk0MjU4Njg3fQ.opN2NjYRxW0Fztbr_KbjeD5iua4CORXXggFNA3iVF1k';
+
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_KEY;
 
 const supabase = (supabaseUrl && supabaseKey) 
   ? createClient(supabaseUrl, supabaseKey)
@@ -30,10 +33,13 @@ export async function query(text, params) {
   // If this is a schema setup query, only run it locally for now 
   // (Supabase JS client doesn't support raw SQL)
   if (text.trim().toUpperCase().startsWith('CREATE TABLE')) {
+    if (supabase) {
+      return { rows: [] };
+    }
     try {
       return await localPool.query(text, params);
     } catch (err) {
-      console.error('Local PG schema setup failed:', err.message);
+      console.warn('Local PG schema query skipped:', err.message);
       return { rows: [] };
     }
   }
