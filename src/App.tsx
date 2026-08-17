@@ -61,6 +61,7 @@ type CollectionRecord = {
   mobile: string;
   alternateNumber: string;
   category: string;
+  type?: string;
   status: string;
   loanAmount: number;
   defaultAmount: number;
@@ -666,7 +667,9 @@ function cleanupAndResetStaleRecords(records: CollectionRecord[]): CollectionRec
         rec.callStatus === "Payment Done" ||
         rec.status === "Closed" ||
         rec.status === "Payment Clear";
-      const pDays = isResolved ? 0 : calculatePendingDays(rec.collectionDate);
+      // Use same priority chain as backend: collectionDateStr → collectionDate → legacy fields
+      const collDateVal = rec.collectionDateStr || rec.collectionDate || (rec as any).collection || (rec as any).lastCollectionDate || "";
+      const pDays = isResolved ? 0 : calculatePendingDays(collDateVal);
 
       // Copy record to update it, ensuring new fields are initialized
       const updatedRec = {
@@ -1789,7 +1792,7 @@ function App() {
       const normStr = (s: string | undefined | null) => (s || "").toUpperCase().replace(/[\s\-_]+/g, "");
       const targetTypeNorm = normStr(typeFilter);
       const recCatNorm = normStr(record.category);
-      const recTypeNorm = normStr((record as any).type);
+      const recTypeNorm = normStr(record.type);
       
       let matchesType = true;
       if (typeFilter !== "All") {
