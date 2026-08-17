@@ -1799,8 +1799,8 @@ function App() {
           (!!recCatNorm && (recCatNorm.includes(targetTypeNorm) || targetTypeNorm.includes(recCatNorm))) ||
           (!!recTypeNorm && (recTypeNorm.includes(targetTypeNorm) || targetTypeNorm.includes(recTypeNorm)));
         
-        // If record has no category or type specified, match DEFAULT
-        if (!recCatNorm && !recTypeNorm && targetTypeNorm === "DEFAULT") {
+        // If record has no category or type specified, match any type filter
+        if (!recCatNorm && !recTypeNorm) {
           matchesType = true;
         }
       }
@@ -2121,11 +2121,12 @@ function App() {
       const displayFollowUpDate = (isUpdatedToday || hasFutureReminder) ? record.followUpDate : "";
       const displayFollowUpTime = (isUpdatedToday || hasFutureReminder) ? (record.followUpTime || "") : "";
 
-      const recCollectionDate = record.collectionDateStr || record.collectionDate || "";
+      const recCollectionDate = record.collectionDateStr || record.collectionDate || (record as any).collection || "";
       const recPendingDays = calculatePendingDays(recCollectionDate);
 
-      // Backfill pendingDays on record if missing or outdated
-      if (record.pendingDays === undefined || record.pendingDays === 0) {
+      // Backfill pendingDays on record if missing or 0
+      const isResolvedRec = record.callStatus === "Payment Done" || record.status === "Closed" || record.status === "Payment Clear";
+      if (!isResolvedRec && (record.pendingDays === undefined || record.pendingDays === 0) && recPendingDays > 0) {
         record.pendingDays = recPendingDays;
         record.defaultDays = recPendingDays;
       }
@@ -2388,7 +2389,7 @@ function App() {
           const anchor = normalizedText(valueFromRow(row, ["anchor", "anchorName", "anchorPerson"]));
           const mobile = normalizePhone(valueFromRow(row, ["mobile", "phone", "contact", "mobileNumber"]));
           const alternateNumber = normalizePhone(valueFromRow(row, ["alternateNumber", "alternateMobile", "alternate_mobile", "altMobile"]));
-          const category = normalizedText(valueFromRow(row, ["category", "segment", "industry"]));
+          const category = normalizedText(valueFromRow(row, ["category", "type", "productType", "product_type", "segment", "industry"])) || "SUPPLY_CHAIN";
           const status = valueFromRow(row, ["status", "collectionStatus", "loanStatus"]) || "Pending";
           const loanAmount = parseAmount(
             valueFromRow(row, ["loanAmount", "loan_amount", "pendingPrincipalAmount", "principalAmount", "amount", "principal"]),
@@ -2447,11 +2448,13 @@ function App() {
               alternateNumber: (existing.alternateNumber && existing.alternateNumber.trim())
                 ? existing.alternateNumber
                 : (alternateNumber || ""),
-              category: category || existing.category,
+              category: category || existing.category || "SUPPLY_CHAIN",
+              type: category || (existing as any).type || existing.category || "SUPPLY_CHAIN",
               status,
               loanAmount,
               defaultAmount,
               collectionDate: collectionDate || existing.collectionDate,
+              collectionDateStr: collectionDate || existing.collectionDateStr || existing.collectionDate || "",
               pendingDays: recPendingDays || existing.pendingDays || 0,
               defaultDays: recPendingDays || existing.defaultDays || 0,
               riskScore,
@@ -2501,11 +2504,13 @@ function App() {
               anchor,
               mobile,
               alternateNumber,
-              category,
+              category: category || "SUPPLY_CHAIN",
+              type: category || "SUPPLY_CHAIN",
               status,
               loanAmount,
               defaultAmount,
               collectionDate,
+              collectionDateStr: collectionDate,
               pendingDays: recPendingDays,
               defaultDays: recPendingDays,
               riskScore,

@@ -154,9 +154,16 @@ export async function ensureSchema() {
             rec.callStatus === "Payment Done" ||
             rec.status === "Closed" ||
             rec.status === "Payment Clear";
-          const d = isResolved ? 0 : calculateDays(rec.collectionDate);
+          const collectionDateVal = rec.collectionDateStr || rec.collectionDate || rec.collection || rec.lastCollectionDate || rec.utrDateStr;
+          const d = isResolved ? 0 : calculateDays(collectionDateVal);
+          const inferredCategory = rec.category || rec.type || rec.meta?.type || "SUPPLY_CHAIN";
+          const inferredType = rec.type || rec.category || rec.meta?.type || "SUPPLY_CHAIN";
           return {
             ...rec,
+            collectionDate: rec.collectionDate || rec.collectionDateStr || collectionDateVal || "",
+            collectionDateStr: rec.collectionDateStr || rec.collectionDate || collectionDateVal || "",
+            category: inferredCategory,
+            type: inferredType,
             pendingDays: d,
             defaultDays: d
           };

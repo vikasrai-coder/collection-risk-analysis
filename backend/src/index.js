@@ -204,11 +204,20 @@ function cleanupAndResetStaleRecords(records) {
         rec.callStatus === "Payment Done" ||
         rec.status === "Closed" ||
         rec.status === "Payment Clear";
-      const pDays = isResolved ? 0 : calculatePendingDays(rec.collectionDate);
+      const collectionDateVal = rec.collectionDateStr || rec.collectionDate || rec.collection || rec.lastCollectionDate || rec.utrDateStr;
+      const pDays = isResolved ? 0 : calculatePendingDays(collectionDateVal);
+
+      // Self-healing: Ensure category and type are populated (default to SUPPLY_CHAIN if missing or empty)
+      const inferredCategory = rec.category || rec.type || rec.meta?.type || "SUPPLY_CHAIN";
+      const inferredType = rec.type || rec.category || rec.meta?.type || "SUPPLY_CHAIN";
 
       // Copy record to update it
       let updatedRec = { 
         ...rec,
+        collectionDate: rec.collectionDate || rec.collectionDateStr || collectionDateVal || "",
+        collectionDateStr: rec.collectionDateStr || rec.collectionDate || collectionDateVal || "",
+        category: inferredCategory,
+        type: inferredType,
         pendingDays: pDays,
         defaultDays: pDays
       };

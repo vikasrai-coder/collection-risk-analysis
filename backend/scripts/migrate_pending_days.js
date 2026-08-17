@@ -149,10 +149,17 @@ export async function migrate() {
         rec.callStatus === 'Payment Done' ||
         rec.status === 'Closed' ||
         rec.status === 'Payment Clear';
-      const days = isResolved ? 0 : calculatePendingDays(rec.collectionDate);
+      const collectionDateVal = rec.collectionDateStr || rec.collectionDate || rec.collection || rec.lastCollectionDate || rec.utrDateStr;
+      const days = isResolved ? 0 : calculatePendingDays(collectionDateVal);
+      const inferredCategory = rec.category || rec.type || rec.meta?.type || "SUPPLY_CHAIN";
+      const inferredType = rec.type || rec.category || rec.meta?.type || "SUPPLY_CHAIN";
       
       return {
         ...rec,
+        collectionDate: rec.collectionDate || rec.collectionDateStr || collectionDateVal || "",
+        collectionDateStr: rec.collectionDateStr || rec.collectionDate || collectionDateVal || "",
+        category: inferredCategory,
+        type: inferredType,
         pendingDays: days,
         defaultDays: days
       };
