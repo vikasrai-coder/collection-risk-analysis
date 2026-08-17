@@ -65,6 +65,7 @@ type CollectionRecord = {
   loanAmount: number;
   defaultAmount: number;
   collectionDate: string;
+  collectionDateStr?: string;
   riskScore: number;
   paymentProbability: number;
   callStatus: string;
@@ -548,20 +549,23 @@ function parseCollectionDate(collectionDateStr: string | number | undefined | nu
           month = val1 - 1;
           day = val2;
         } else if (val2 < 100) {
-          year = 2000 + val2;
+          year = (val2 === 0) ? 2026 : (val2 < 50 ? 2000 + val2 : 1900 + val2);
           day = val0;
           month = val1 - 1;
         }
       }
 
       if (year > 0 && month >= 0 && month < 12 && day > 0 && day <= 31) {
+        if (year === 2000) year = 2026;
         return new Date(Date.UTC(year, month, day));
       }
     }
 
     const fallback = new Date(cleanStr);
     if (!isNaN(fallback.getTime())) {
-      return new Date(Date.UTC(fallback.getFullYear(), fallback.getMonth(), fallback.getDate()));
+      let y = fallback.getFullYear();
+      if (y === 2000) y = 2026;
+      return new Date(Date.UTC(y, fallback.getMonth(), fallback.getDate()));
     }
   } catch (e) {}
   return null;
@@ -606,7 +610,13 @@ function calculatePendingDays(collectionDateStr: string | number | undefined | n
 
     const todayDate = new Date(Date.UTC(todayYear, todayMonth, todayDay));
     const diffTime = todayDate.getTime() - recordDate.getTime();
-    const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+    let diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+    
+    // Sanity check: If diffDays > 3650 (~10 years), cap/adjust for 26-year shift artifact (year 2000 vs 2026)
+    if (diffDays > 3650) {
+      diffDays = Math.max(0, diffDays - 9496);
+    }
+    
     return diffDays > 0 ? diffDays : 0;
   } catch (e) {
     return 0;
@@ -1050,6 +1060,7 @@ function App() {
   const [editingId, setEditingId] = useState<string>("");
   const [editingGroups, setEditingGroups] = useState<Record<string, boolean>>({});
   const [followupEditMode, setFollowupEditMode] = useState(false);
+  const [followupSortBy, setFollowupSortBy] = useState<"days_desc" | "days_asc" | "amount_desc" | "amount_asc" | "user_asc">("days_desc");
   const [visibleColumns, setVisibleColumns] = useState<Record<FollowupColumnKey, boolean>>(() => {
     try {
       const saved = localStorage.getItem("collection_risk_followup_columns");
@@ -1774,7 +1785,25 @@ function App() {
 
       const matchesLender = lenderFilter === "All" || record.lender === lenderFilter;
       const matchesAnchor = anchorFilter === "All" || record.anchor === anchorFilter;
-      const matchesType = typeFilter === "All" || record.category === typeFilter || (record as any).type === typeFilter;
+      
+      const normStr = (s: string | undefined | null) => (s || "").toUpperCase().replace(/[\s\-_]+/g, "");
+      const targetTypeNorm = normStr(typeFilter);
+      const recCatNorm = normStr(record.category);
+      const recTypeNorm = normStr((record as any).type);
+      
+      let matchesType = true;
+      if (typeFilter !== "All") {
+        matchesType =
+          recCatNorm === targetTypeNorm ||
+          recTypeNorm === targetTypeNorm ||
+          (!!recCatNorm && (recCatNorm.includes(targetTypeNorm) || targetTypeNorm.includes(recCatNorm))) ||
+          (!!recTypeNorm && (recTypeNorm.includes(targetTypeNorm) || targetTypeNorm.includes(recTypeNorm)));
+        
+        // If record has no category or type specified, match DEFAULT
+        if (!recCatNorm && !recTypeNorm && targetTypeNorm === "DEFAULT") {
+          matchesType = true;
+        }
+      }
       
       let matchesStatus = true;
       if (statusFilter === "Active") {
@@ -2092,7 +2121,7 @@ function App() {
       const displayFollowUpDate = (isUpdatedToday || hasFutureReminder) ? record.followUpDate : "";
       const displayFollowUpTime = (isUpdatedToday || hasFutureReminder) ? (record.followUpTime || "") : "";
 
-      const recCollectionDate = record.collectionDate || (record as any).collectionDateStr || "";
+      const recCollectionDate = record.collectionDateStr || record.collectionDate || "";
       const recPendingDays = calculatePendingDays(recCollectionDate);
 
       // Backfill pendingDays on record if missing or outdated
@@ -2174,8 +2203,36 @@ function App() {
       }
     }
 
-    return Array.from(groups.values()).sort((a, b) => b.totalDefaultAmount - a.totalDefaultAmount);
-  }, [filteredRecords]);
+    return Array.from(groups.values()).sort((a, b) => {
+      if (followupSortBy === "days_desc") {
+        const timeA = a.oldestCollectionDate ? parseCollectionDate(a.oldestCollectionDate)?.getTime() || 0 : 0;
+        const timeB = b.oldestCollectionDate ? parseCollectionDate(b.oldestCollectionDate)?.getTime() || 0 : 0;
+        if (timeA !== timeB) {
+          if (timeA === 0) return 1;
+          if (timeB === 0) return -1;
+          return timeA - timeB; // Earliest collection date timestamp = most days pending -> top!
+        }
+        return (b.pendingDays || 0) - (a.pendingDays || 0);
+      }
+      if (followupSortBy === "days_asc") {
+        const timeA = a.oldestCollectionDate ? parseCollectionDate(a.oldestCollectionDate)?.getTime() || 0 : 0;
+        const timeB = b.oldestCollectionDate ? parseCollectionDate(b.oldestCollectionDate)?.getTime() || 0 : 0;
+        if (timeA !== timeB) {
+          if (timeA === 0) return 1;
+          if (timeB === 0) return -1;
+          return timeB - timeA; // Latest collection date timestamp = least days pending -> top!
+        }
+        return (a.pendingDays || 0) - (b.pendingDays || 0);
+      }
+      if (followupSortBy === "amount_asc") {
+        return a.totalDefaultAmount - b.totalDefaultAmount;
+      }
+      if (followupSortBy === "user_asc") {
+        return a.userId.localeCompare(b.userId);
+      }
+      return b.totalDefaultAmount - a.totalDefaultAmount;
+    });
+  }, [filteredRecords, followupSortBy]);
 
   function getGroupDraft(group: FollowupGroup): Draft {
     return (
@@ -3888,6 +3945,19 @@ function App() {
                           </div>
                         )}
                       </div>
+
+                      {/* Sort By Dropdown */}
+                      <select
+                        value={followupSortBy}
+                        onChange={(e) => setFollowupSortBy(e.target.value as any)}
+                        className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm outline-none hover:bg-slate-50 transition"
+                      >
+                        <option value="days_desc">Sort: Oldest Collection Date (Most Days Pending)</option>
+                        <option value="days_asc">Sort: Newest Collection Date (Least Days Pending)</option>
+                        <option value="amount_desc">Sort: Highest Default Amount</option>
+                        <option value="amount_asc">Sort: Lowest Default Amount</option>
+                        <option value="user_asc">Sort: User ID (A-Z)</option>
+                      </select>
                     </div>
                   </div>
 
