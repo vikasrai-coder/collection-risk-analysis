@@ -109,6 +109,41 @@ type InteractionHistoryItem = {
   updatedBy: string;
 };
 
+type FollowupColumnKey =
+  | "user"
+  | "customer"
+  | "lender"
+  | "anchor"
+  | "contact"
+  | "days"
+  | "amount"
+  | "category"
+  | "collectionDate"
+  | "remarks"
+  | "followup"
+  | "action";
+
+interface ColumnOption {
+  key: FollowupColumnKey;
+  label: string;
+  defaultVisible: boolean;
+}
+
+const FOLLOWUP_COLUMNS: ColumnOption[] = [
+  { key: "user", label: "User ID", defaultVisible: true },
+  { key: "customer", label: "Customer", defaultVisible: true },
+  { key: "lender", label: "Lender", defaultVisible: true },
+  { key: "anchor", label: "Anchor", defaultVisible: true },
+  { key: "contact", label: "Contact", defaultVisible: true },
+  { key: "days", label: "Days in Default", defaultVisible: true },
+  { key: "amount", label: "Default Amount", defaultVisible: true },
+  { key: "category", label: "Category", defaultVisible: false },
+  { key: "collectionDate", label: "Collection Date", defaultVisible: false },
+  { key: "remarks", label: "Remarks", defaultVisible: true },
+  { key: "followup", label: "Follow-up Schedule", defaultVisible: true },
+  { key: "action", label: "Action Buttons", defaultVisible: true },
+];
+
 type TelegramSettings = {
   isEnabled: boolean;
   botToken: string;
@@ -444,10 +479,33 @@ function computeRiskScore(loanAmount: number, defaultAmount: number, status: str
   return Math.max(5, Math.min(95, score));
 }
 
-function parseCollectionDate(collectionDateStr: string | undefined | null): Date | null {
-  if (!collectionDateStr) return null;
+function parseCollectionDate(collectionDateStr: string | number | undefined | null): Date | null {
+  if (collectionDateStr === undefined || collectionDateStr === null || collectionDateStr === "") return null;
   try {
     const cleanStr = String(collectionDateStr).trim();
+    if (!cleanStr) return null;
+
+    // Handle numeric timestamp or Excel serial date (e.g. 45450 or unix timestamp)
+    if (/^\d+(\.\d+)?$/.test(cleanStr)) {
+      const num = parseFloat(cleanStr);
+      // Unix timestamp in ms
+      if (num > 1000000000000) {
+        const d = new Date(num);
+        if (!isNaN(d.getTime())) return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      }
+      // Unix timestamp in seconds
+      if (num > 1000000000) {
+        const d = new Date(num * 1000);
+        if (!isNaN(d.getTime())) return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      }
+      // Excel serial date number (roughly 20000 to 70000 for years 1954-2091)
+      if (num > 20000 && num < 70000) {
+        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+        const millisPerDay = 86400000;
+        const d = new Date(excelEpoch.getTime() + Math.floor(num) * millisPerDay);
+        if (!isNaN(d.getTime())) return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      }
+    }
 
     // Prioritize standard JS Date parsing for ISO, GMT, or alphabetic date formats
     if (/[a-zA-Z]/.test(cleanStr) || cleanStr.includes('T')) {
@@ -509,8 +567,8 @@ function parseCollectionDate(collectionDateStr: string | undefined | null): Date
   return null;
 }
 
-function calculatePendingDays(collectionDateStr: string | undefined | null): number {
-  if (!collectionDateStr) return 0;
+function calculatePendingDays(collectionDateStr: string | number | undefined | null): number {
+  if (collectionDateStr === undefined || collectionDateStr === null || collectionDateStr === "") return 0;
   const recordDate = parseCollectionDate(collectionDateStr);
   if (!recordDate) return 0;
 
@@ -987,10 +1045,53 @@ function App() {
   const [search, setSearch] = useState("");
   const [lenderFilter, setLenderFilter] = useState("All");
   const [anchorFilter, setAnchorFilter] = useState("All");
+  const [typeFilter, setTypeFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("Active");
   const [editingId, setEditingId] = useState<string>("");
   const [editingGroups, setEditingGroups] = useState<Record<string, boolean>>({});
   const [followupEditMode, setFollowupEditMode] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState<Record<FollowupColumnKey, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem("collection_risk_followup_columns");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        const initial: Record<string, boolean> = {};
+        FOLLOWUP_COLUMNS.forEach((col) => {
+          initial[col.key] = parsed[col.key] !== undefined ? parsed[col.key] : col.defaultVisible;
+        });
+        return initial as Record<FollowupColumnKey, boolean>;
+      }
+    } catch (e) {}
+    const initial: Record<string, boolean> = {};
+    FOLLOWUP_COLUMNS.forEach((col) => {
+      initial[col.key] = col.defaultVisible;
+    });
+    return initial as Record<FollowupColumnKey, boolean>;
+  });
+
+  const [showColumnCustomizeModal, setShowColumnCustomizeModal] = useState(false);
+
+  const toggleColumn = (key: FollowupColumnKey) => {
+    setVisibleColumns((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      localStorage.setItem("collection_risk_followup_columns", JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const selectAllColumns = () => {
+    const next: Record<string, boolean> = {};
+    FOLLOWUP_COLUMNS.forEach((col) => (next[col.key] = true));
+    setVisibleColumns(next as Record<FollowupColumnKey, boolean>);
+    localStorage.setItem("collection_risk_followup_columns", JSON.stringify(next));
+  };
+
+  const resetDefaultColumns = () => {
+    const next: Record<string, boolean> = {};
+    FOLLOWUP_COLUMNS.forEach((col) => (next[col.key] = col.defaultVisible));
+    setVisibleColumns(next as Record<FollowupColumnKey, boolean>);
+    localStorage.setItem("collection_risk_followup_columns", JSON.stringify(next));
+  };
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [lastUploadMessage, setLastUploadMessage] = useState("");
   const [recordsReady, setRecordsReady] = useState(false);
@@ -1646,6 +1747,13 @@ function App() {
     [records],
   );
 
+  const types = useMemo(() => {
+    const defaultTypes = ["DEFAULT", "PERSONAL_LOAN", "SALARIED_LOAN", "SUPPLY_CHAIN", "TERM_LOAN"];
+    const foundTypes = records.map((record) => record.category || (record as any).type).filter(Boolean);
+    const combined = new Set([...defaultTypes, ...foundTypes]);
+    return ["All", ...Array.from(combined).sort()];
+  }, [records]);
+
   const filteredRecords = useMemo(() => {
     return restrictToAllowedLenders(records).filter((record) => {
       const matchesSearch =
@@ -1666,6 +1774,7 @@ function App() {
 
       const matchesLender = lenderFilter === "All" || record.lender === lenderFilter;
       const matchesAnchor = anchorFilter === "All" || record.anchor === anchorFilter;
+      const matchesType = typeFilter === "All" || record.category === typeFilter || (record as any).type === typeFilter;
       
       let matchesStatus = true;
       if (statusFilter === "Active") {
@@ -1677,9 +1786,9 @@ function App() {
         matchesStatus = record.callStatus === statusFilter;
       }
 
-      return matchesSearch && matchesLender && matchesAnchor && matchesStatus;
+      return matchesSearch && matchesLender && matchesAnchor && matchesType && matchesStatus;
     });
-  }, [records, search, lenderFilter, anchorFilter, statusFilter]);
+  }, [records, search, lenderFilter, anchorFilter, typeFilter, statusFilter]);
 
   const topCustomers = useMemo(() => {
     const groups = new Map<
@@ -1983,6 +2092,15 @@ function App() {
       const displayFollowUpDate = (isUpdatedToday || hasFutureReminder) ? record.followUpDate : "";
       const displayFollowUpTime = (isUpdatedToday || hasFutureReminder) ? (record.followUpTime || "") : "";
 
+      const recCollectionDate = record.collectionDate || (record as any).collectionDateStr || "";
+      const recPendingDays = calculatePendingDays(recCollectionDate);
+
+      // Backfill pendingDays on record if missing or outdated
+      if (record.pendingDays === undefined || record.pendingDays === 0) {
+        record.pendingDays = recPendingDays;
+        record.defaultDays = recPendingDays;
+      }
+
       const groupKey = makeFollowupGroupKey(record);
       const existing = groups.get(groupKey);
       if (existing) {
@@ -1991,12 +2109,14 @@ function App() {
         existing.totalDefaultAmount += record.defaultAmount;
         existing.loanCount += 1;
         
-        // Track the oldest collection date and its corresponding pending days
-        if (record.collectionDate) {
-          if (!existing.oldestCollectionDate || record.collectionDate < existing.oldestCollectionDate) {
-            existing.oldestCollectionDate = record.collectionDate;
-            existing.pendingDays = record.pendingDays;
-            existing.defaultDays = record.defaultDays;
+        // Track the oldest collection date (using parsed Date comparison) and its corresponding pending days
+        if (recCollectionDate) {
+          const existingParsed = existing.oldestCollectionDate ? parseCollectionDate(existing.oldestCollectionDate) : null;
+          const currentParsed = parseCollectionDate(recCollectionDate);
+          if (!existingParsed || (currentParsed && currentParsed.getTime() < existingParsed.getTime())) {
+            existing.oldestCollectionDate = recCollectionDate;
+            existing.pendingDays = recPendingDays;
+            existing.defaultDays = recPendingDays;
           }
         }
 
@@ -2047,9 +2167,9 @@ function App() {
           totalDefaultAmount: record.defaultAmount,
           loanCount: 1,
           updatedAt: record.updatedAt,
-          pendingDays: record.pendingDays,
-          defaultDays: record.defaultDays,
-          oldestCollectionDate: record.collectionDate,
+          pendingDays: recPendingDays,
+          defaultDays: recPendingDays,
+          oldestCollectionDate: recCollectionDate,
         });
       }
     }
@@ -2220,8 +2340,9 @@ function App() {
             valueFromRow(row, ["defaultAmount", "default_amount", "overdueAmt", "overdue", "outstanding", "dueAmount", "amount"]),
           );
           const collectionDate =
-            valueFromRow(row, ["collectionDateStr", "utrDateStr", "collectionDate", "date", "transactionDate"]) ||
-            valueFromRow(row, ["lastCollectionDate"]);
+            valueFromRow(row, ["collectionDateStr", "collection_date_str", "utrDateStr", "utr_date_str", "collectionDate", "collection_date", "date", "transactionDate", "defaultDate", "default_date"]) ||
+            valueFromRow(row, ["lastCollectionDate"]) || "";
+          const recPendingDays = calculatePendingDays(collectionDate);
           const riskScore = computeRiskScore(loanAmount, defaultAmount, status);
           const paymentProbability = Math.max(5, 100 - riskScore);
 
@@ -2273,7 +2394,9 @@ function App() {
               status,
               loanAmount,
               defaultAmount,
-              collectionDate,
+              collectionDate: collectionDate || existing.collectionDate,
+              pendingDays: recPendingDays || existing.pendingDays || 0,
+              defaultDays: recPendingDays || existing.defaultDays || 0,
               riskScore,
               paymentProbability,
               // Keep call details user-driven; never overwrite agent-set values with sheet values
@@ -2326,6 +2449,8 @@ function App() {
               loanAmount,
               defaultAmount,
               collectionDate,
+              pendingDays: recPendingDays,
+              defaultDays: recPendingDays,
               riskScore,
               paymentProbability,
               callStatus: finalCallStatus,
@@ -3283,6 +3408,19 @@ function App() {
                 </select>
 
                 <select
+                  value={typeFilter}
+                  onChange={(event) => setTypeFilter(event.target.value)}
+                  className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
+                >
+                  <option value="All">All Types</option>
+                  {types.filter(t => t !== "All").map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+
+                <select
                   value={statusFilter}
                   onChange={(event) => setStatusFilter(event.target.value)}
                   className="h-11 rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none"
@@ -3687,31 +3825,88 @@ function App() {
                 )}
 
                 <Panel title="Daily Follow-up" subtitle="">
-                  <div className="mb-4 flex flex-wrap items-center gap-3">
-                    <label className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={followupEditMode}
-                        onChange={toggleFollowupEditMode}
-                      />
-                      Edit mode
-                    </label>
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <label className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 cursor-pointer shadow-sm hover:border-slate-300 transition">
+                        <input
+                          type="checkbox"
+                          checked={followupEditMode}
+                          onChange={toggleFollowupEditMode}
+                          className="rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                        />
+                        Edit mode
+                      </label>
+
+                      {/* Customize Fields Dropdown Button */}
+                      <div className="relative">
+                        <button
+                          onClick={() => setShowColumnCustomizeModal(!showColumnCustomizeModal)}
+                          className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 transition active:scale-[0.98]"
+                        >
+                          <Eye className="h-4 w-4 text-cyan-600" />
+                          <span>Customize Fields</span>
+                        </button>
+
+                        {showColumnCustomizeModal && (
+                          <div className="absolute left-0 mt-2 z-50 w-72 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
+                            <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-3">
+                              <span className="font-semibold text-slate-800 text-sm">Visible Table Fields</span>
+                              <button
+                                onClick={() => setShowColumnCustomizeModal(false)}
+                                className="text-slate-400 hover:text-slate-600 p-1"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                            <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+                              {FOLLOWUP_COLUMNS.map((col) => (
+                                <label key={col.key} className="flex items-center justify-between text-xs py-1.5 text-slate-700 cursor-pointer hover:bg-slate-50 px-2 rounded-lg transition">
+                                  <span>{col.label}</span>
+                                  <input
+                                    type="checkbox"
+                                    checked={!!visibleColumns[col.key]}
+                                    onChange={() => toggleColumn(col.key)}
+                                    className="rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                                  />
+                                </label>
+                              ))}
+                            </div>
+                            <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-3">
+                              <button
+                                onClick={selectAllColumns}
+                                className="text-xs text-cyan-600 hover:text-cyan-800 font-semibold"
+                              >
+                                Select All
+                              </button>
+                              <button
+                                onClick={resetDefaultColumns}
+                                className="text-xs text-slate-500 hover:text-slate-700 font-medium"
+                              >
+                                Reset Defaults
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
 
                   <div className="hidden overflow-x-auto md:block">
                     <table className="min-w-full text-sm">
                       <thead className="text-left text-slate-500">
                         <tr>
-                           <th className="pb-3 font-medium">User</th>
-                          <th className="pb-3 font-medium">Customer</th>
-                          <th className="pb-3 font-medium">Lender</th>
-                          <th className="pb-3 font-medium">Anchor</th>
-                          <th className="pb-3 font-medium">Contact</th>
-                          <th className="pb-3 font-medium">Days</th>
-                          <th className="pb-3 font-medium">Amount</th>
-                          <th className="pb-3 font-medium">Remarks</th>
-                          <th className="pb-3 font-medium">Follow-up</th>
-                          <th className="pb-3 font-medium">Action</th>
+                          {visibleColumns.user && <th className="pb-3 font-medium">User</th>}
+                          {visibleColumns.customer && <th className="pb-3 font-medium">Customer</th>}
+                          {visibleColumns.lender && <th className="pb-3 font-medium">Lender</th>}
+                          {visibleColumns.anchor && <th className="pb-3 font-medium">Anchor</th>}
+                          {visibleColumns.contact && <th className="pb-3 font-medium">Contact</th>}
+                          {visibleColumns.days && <th className="pb-3 font-medium">Days</th>}
+                          {visibleColumns.amount && <th className="pb-3 font-medium">Amount</th>}
+                          {visibleColumns.category && <th className="pb-3 font-medium">Category</th>}
+                          {visibleColumns.collectionDate && <th className="pb-3 font-medium">Collection Date</th>}
+                          {visibleColumns.remarks && <th className="pb-3 font-medium">Remarks</th>}
+                          {visibleColumns.followup && <th className="pb-3 font-medium">Follow-up</th>}
+                          {visibleColumns.action && <th className="pb-3 font-medium">Action</th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -3730,238 +3925,267 @@ function App() {
                                 draft.callStatus === "Payment Done" ? "bg-emerald-50" : ""
                               }`}
                             >
-                              <td className="py-3 font-semibold">
-                                <button
-                                  onClick={() => setSelectedUserId(group.userId)}
-                                  className="text-cyan-600 hover:text-cyan-700 hover:underline transition font-semibold"
-                                >
-                                  {group.userId}
-                                </button>
-                              </td>
-                              <td className="py-3">
-                                {editing ? (
-                                  <input
-                                    type="text"
-                                    value={draft.customerName || ""}
-                                    onChange={(e) => updateFollowupDraft(group, { customerName: e.target.value })}
-                                    className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-sm outline-none focus:border-cyan-400"
-                                  />
-                                ) : (
-                                  group.customerName || "-"
-                                )}
-                              </td>
-                              <td className="py-3">
-                                {editing ? (
-                                  <input
-                                    type="text"
-                                    value={draft.lender || ""}
-                                    onChange={(e) => updateFollowupDraft(group, { lender: e.target.value })}
-                                    className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-sm outline-none focus:border-cyan-400"
-                                  />
-                                ) : (
-                                  group.lender || "-"
-                                )}
-                              </td>
-                              <td className="py-3">
-                                {editing ? (
-                                  <input
-                                    type="text"
-                                    value={draft.anchor || ""}
-                                    onChange={(e) => updateFollowupDraft(group, { anchor: e.target.value })}
-                                    className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-sm outline-none focus:border-cyan-400"
-                                  />
-                                ) : (
-                                  group.anchor || "-"
-                                )}
-                              </td>
-                              <td className="py-3">
-                                {editing ? (
-                                  <div className="space-y-1">
-                                    <input
-                                      type="text"
-                                      value={draft.mobile || ""}
-                                      onChange={(e) => updateFollowupDraft(group, { mobile: e.target.value })}
-                                      placeholder="Primary Mobile"
-                                      className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-xs outline-none focus:border-cyan-400 block"
-                                    />
-                                    <input
-                                      type="text"
-                                      value={draft.alternateNumber || ""}
-                                      onChange={(e) => updateFollowupDraft(group, { alternateNumber: e.target.value })}
-                                      placeholder="Alt Mobile"
-                                      className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-xs outline-none focus:border-cyan-400 block"
-                                    />
-                                  </div>
-                                ) : (
-                                  <div className="space-y-2">
-                                    {group.mobile ? (
-                                      <div className="flex items-center gap-2">
-                                        <span className="font-semibold text-slate-900">{group.mobile}</span>
-                                        <div className="flex gap-1">
-                                          <a
-                                            href={`tel:${group.mobile}`}
-                                            className="rounded-lg border border-slate-200 p-1 text-slate-700 hover:bg-slate-50 transition"
-                                            title="Call Primary"
-                                          >
-                                            <Phone className="h-3.5 w-3.5" />
-                                          </a>
-                                          <a
-                                            href={getWhatsAppLink(group.mobile)}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="rounded-lg border border-slate-200 p-1 text-emerald-700 hover:bg-emerald-50 transition"
-                                            title="WhatsApp Primary"
-                                          >
-                                            <MessageCircle className="h-3.5 w-3.5" />
-                                          </a>
-                                          <a
-                                            href={`https://console.kredmint.in/merchant/dashboard/?userId=${group.userId}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="rounded-lg border border-slate-200 p-1 text-cyan-600 hover:bg-cyan-50 transition"
-                                            title="Kredmint Console"
-                                          >
-                                            <ArrowUpRight className="h-3.5 w-3.5" />
-                                          </a>
-                                        </div>
-                                      </div>
-                                    ) : (
-                                      <span className="text-slate-400">-</span>
-                                    )}
-                                    {group.alternateNumber ? (
-                                      <div className="flex items-center gap-2 border-t border-slate-100 pt-1.5">
-                                        <span className="text-xs text-slate-500">{group.alternateNumber}</span>
-                                        <div className="flex gap-1">
-                                          <a
-                                            href={`tel:${group.alternateNumber}`}
-                                            className="rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-slate-50 transition"
-                                            title="Call Alternate"
-                                          >
-                                            <Phone className="h-3.5 w-3.5" />
-                                          </a>
-                                          <a
-                                            href={getWhatsAppLink(group.alternateNumber)}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="rounded-lg border border-slate-200 p-1 text-emerald-600 hover:bg-emerald-50 transition"
-                                            title="WhatsApp Alternate"
-                                          >
-                                            <MessageCircle className="h-3.5 w-3.5" />
-                                          </a>
-                                        </div>
-                                      </div>
-                                    ) : null}
-                                  </div>
-                                )}
-                              </td>
-                              <td className="py-3">
-                                {group.pendingDays !== undefined && group.pendingDays > 0 ? (
-                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 border border-rose-100 text-rose-700">
-                                    <Clock3 className="h-3.5 w-3.5 text-rose-600 animate-pulse" />
-                                    <span>{group.pendingDays} days</span>
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-400 font-medium text-xs">0 days</span>
-                                )}
-                              </td>
-                              <td className="py-3">
-                                <div className="font-semibold">{formatCurrency(group.totalDefaultAmount)}</div>
-                                <div className="text-xs text-slate-500">
-                                  {formatCurrency(group.totalLoanAmount)} / {group.loanCount} loans
-                                </div>
-                              </td>
-                              <td className="py-3">
-                                {editing ? (
-                                  <textarea
-                                    value={draft.remark || ""}
-                                    disabled={locked || draft.callStatus === "Payment Done"}
-                                    onChange={(event) => updateFollowupDraft(group, { remark: event.target.value })}
-                                    className="min-h-20 w-52 rounded-xl border border-slate-200 px-3 py-2 disabled:bg-slate-100"
-                                    placeholder="Remarks"
-                                  />
-                                ) : (
-                                  <div>
-                                    <StatusPill value={group.callStatus || "Pending"} />
-                                    {/* Remarks are only shown in the timeline (click user ID), not here */}
-                                  </div>
-                                )}
-                              </td>
-                              <td className="py-3">
-                                {editing ? (
-                                  <div className="space-y-2">
-                                    <select
-                                      value={draft.callStatus || "Pending"}
-                                      disabled={locked}
-                                      onChange={(event) => updateFollowupDraft(group, { callStatus: event.target.value })}
-                                      className="w-40 rounded-xl border border-slate-200 px-3 py-2 disabled:bg-slate-100"
-                                    >
-                                      {callStatuses.map((status) => (
-                                        <option key={status} value={status}>
-                                          {status}
-                                        </option>
-                                      ))}
-                                    </select>
-                                    <input
-                                      type="date"
-                                      disabled={locked || draft.callStatus === "Payment Done"}
-                                      value={draft.followUpDate || ""}
-                                      onChange={(event) => updateFollowupDraft(group, { followUpDate: event.target.value })}
-                                      className="w-40 rounded-xl border border-slate-200 px-3 py-2 disabled:bg-slate-100 block"
-                                    />
-                                    <input
-                                      type="time"
-                                      disabled={locked || draft.callStatus === "Payment Done"}
-                                      value={draft.followUpTime || ""}
-                                      onChange={(event) => updateFollowupDraft(group, { followUpTime: event.target.value })}
-                                      className="w-40 rounded-xl border border-slate-200 px-3 py-2 disabled:bg-slate-100 block mt-1.5"
-                                    />
-                                    <label className="flex items-center gap-2 text-xs text-slate-600">
-                                      <input
-                                        type="checkbox"
-                                        disabled={locked || draft.callStatus === "Payment Done"}
-                                        checked={draft.reminderEnabled || false}
-                                        onChange={(event) => updateFollowupDraft(group, { reminderEnabled: event.target.checked })}
-                                      />
-                                      Reminder on
-                                    </label>
-                                  </div>
-                                ) : (
-                                  <div>
-                                    <div className="font-semibold text-slate-800">{formatDateTime(group.followUpDate, group.followUpTime)}</div>
-                                    <div className="text-xs text-slate-500">{group.reminderEnabled ? "Reminder active" : "Reminder off"}</div>
-                                  </div>
-                                )}
-                              </td>
-                              <td className="py-3">
-                                {editing ? (
-                                  <div className="flex flex-col gap-2">
-                                    <button
-                                      onClick={() => submitFollowupEdit(group)}
-                                      disabled={locked}
-                                      className="rounded-xl bg-slate-950 px-4 py-2 text-sm text-white disabled:bg-slate-300"
-                                    >
-                                      Save
-                                    </button>
-                                    {!followupEditMode ? (
-                                      <button
-                                        onClick={() => cancelFollowupEdit(group.groupKey)}
-                                        className="rounded-xl border border-slate-200 px-4 py-2 text-sm"
-                                      >
-                                        Cancel
-                                      </button>
-                                    ) : null}
-                                  </div>
-                                ) : (
+                              {visibleColumns.user && (
+                                <td className="py-3 font-semibold">
                                   <button
-                                    onClick={() => beginFollowupEdit(group)}
-                                    disabled={locked}
-                                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm disabled:bg-slate-100"
+                                    onClick={() => setSelectedUserId(group.userId)}
+                                    className="text-cyan-600 hover:text-cyan-700 hover:underline transition font-semibold"
                                   >
-                                    <Pencil className="h-4 w-4" />
-                                    {locked ? "Locked" : "Edit"}
+                                    {group.userId}
                                   </button>
-                                )}
-                              </td>
+                                </td>
+                              )}
+                              {visibleColumns.customer && (
+                                <td className="py-3">
+                                  {editing ? (
+                                    <input
+                                      type="text"
+                                      value={draft.customerName || ""}
+                                      onChange={(e) => updateFollowupDraft(group, { customerName: e.target.value })}
+                                      className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-sm outline-none focus:border-cyan-400"
+                                    />
+                                  ) : (
+                                    group.customerName || "-"
+                                  )}
+                                </td>
+                              )}
+                              {visibleColumns.lender && (
+                                <td className="py-3">
+                                  {editing ? (
+                                    <input
+                                      type="text"
+                                      value={draft.lender || ""}
+                                      onChange={(e) => updateFollowupDraft(group, { lender: e.target.value })}
+                                      className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-sm outline-none focus:border-cyan-400"
+                                    />
+                                  ) : (
+                                    group.lender || "-"
+                                  )}
+                                </td>
+                              )}
+                              {visibleColumns.anchor && (
+                                <td className="py-3">
+                                  {editing ? (
+                                    <input
+                                      type="text"
+                                      value={draft.anchor || ""}
+                                      onChange={(e) => updateFollowupDraft(group, { anchor: e.target.value })}
+                                      className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-sm outline-none focus:border-cyan-400"
+                                    />
+                                  ) : (
+                                    group.anchor || "-"
+                                  )}
+                                </td>
+                              )}
+                              {visibleColumns.contact && (
+                                <td className="py-3">
+                                  {editing ? (
+                                    <div className="space-y-1">
+                                      <input
+                                        type="text"
+                                        value={draft.mobile || ""}
+                                        onChange={(e) => updateFollowupDraft(group, { mobile: e.target.value })}
+                                        placeholder="Primary Mobile"
+                                        className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-xs outline-none focus:border-cyan-400 block"
+                                      />
+                                      <input
+                                        type="text"
+                                        value={draft.alternateNumber || ""}
+                                        onChange={(e) => updateFollowupDraft(group, { alternateNumber: e.target.value })}
+                                        placeholder="Alt Mobile"
+                                        className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-xs outline-none focus:border-cyan-400 block"
+                                      />
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-2">
+                                      {group.mobile ? (
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-semibold text-slate-900">{group.mobile}</span>
+                                          <div className="flex gap-1">
+                                            <a
+                                              href={`tel:${group.mobile}`}
+                                              className="rounded-lg border border-slate-200 p-1 text-slate-700 hover:bg-slate-50 transition"
+                                              title="Call Primary"
+                                            >
+                                              <Phone className="h-3.5 w-3.5" />
+                                            </a>
+                                            <a
+                                              href={getWhatsAppLink(group.mobile)}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="rounded-lg border border-slate-200 p-1 text-emerald-700 hover:bg-emerald-50 transition"
+                                              title="WhatsApp Primary"
+                                            >
+                                              <MessageCircle className="h-3.5 w-3.5" />
+                                            </a>
+                                            <a
+                                              href={`https://console.kredmint.in/merchant/dashboard/?userId=${group.userId}`}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="rounded-lg border border-slate-200 p-1 text-cyan-600 hover:bg-cyan-50 transition"
+                                              title="Kredmint Console"
+                                            >
+                                              <ArrowUpRight className="h-3.5 w-3.5" />
+                                            </a>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <span className="text-slate-400">-</span>
+                                      )}
+                                      {group.alternateNumber ? (
+                                        <div className="flex items-center gap-2 border-t border-slate-100 pt-1.5">
+                                          <span className="text-xs text-slate-500">{group.alternateNumber}</span>
+                                          <div className="flex gap-1">
+                                            <a
+                                              href={`tel:${group.alternateNumber}`}
+                                              className="rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-slate-50 transition"
+                                              title="Call Alternate"
+                                            >
+                                              <Phone className="h-3.5 w-3.5" />
+                                            </a>
+                                            <a
+                                              href={getWhatsAppLink(group.alternateNumber)}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="rounded-lg border border-slate-200 p-1 text-emerald-600 hover:bg-emerald-50 transition"
+                                              title="WhatsApp Alternate"
+                                            >
+                                              <MessageCircle className="h-3.5 w-3.5" />
+                                            </a>
+                                          </div>
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  )}
+                                </td>
+                              )}
+                              {visibleColumns.days && (
+                                <td className="py-3">
+                                  {group.pendingDays !== undefined && group.pendingDays > 0 ? (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 border border-rose-100 text-rose-700">
+                                      <Clock3 className="h-3.5 w-3.5 text-rose-600 animate-pulse" />
+                                      <span>{group.pendingDays} days</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 font-medium text-xs">0 days</span>
+                                  )}
+                                </td>
+                              )}
+                              {visibleColumns.amount && (
+                                <td className="py-3">
+                                  <div className="font-semibold">{formatCurrency(group.totalDefaultAmount)}</div>
+                                  <div className="text-xs text-slate-500">
+                                    {formatCurrency(group.totalLoanAmount)} / {group.loanCount} loans
+                                  </div>
+                                </td>
+                              )}
+                              {visibleColumns.category && (
+                                <td className="py-3 text-xs text-slate-600 font-medium">
+                                  {records.find((r) => group.sourceIds.includes(r.id))?.category || "-"}
+                                </td>
+                              )}
+                              {visibleColumns.collectionDate && (
+                                <td className="py-3 text-xs text-slate-600 font-medium">
+                                  {group.oldestCollectionDate || "-"}
+                                </td>
+                              )}
+                              {visibleColumns.remarks && (
+                                <td className="py-3">
+                                  {editing ? (
+                                    <textarea
+                                      value={draft.remark || ""}
+                                      disabled={locked || draft.callStatus === "Payment Done"}
+                                      onChange={(event) => updateFollowupDraft(group, { remark: event.target.value })}
+                                      className="min-h-20 w-52 rounded-xl border border-slate-200 px-3 py-2 disabled:bg-slate-100"
+                                      placeholder="Remarks"
+                                    />
+                                  ) : (
+                                    <div>
+                                      <StatusPill value={group.callStatus || "Pending"} />
+                                    </div>
+                                  )}
+                                </td>
+                              )}
+                              {visibleColumns.followup && (
+                                <td className="py-3">
+                                  {editing ? (
+                                    <div className="space-y-2">
+                                      <select
+                                        value={draft.callStatus || "Pending"}
+                                        disabled={locked}
+                                        onChange={(event) => updateFollowupDraft(group, { callStatus: event.target.value })}
+                                        className="w-40 rounded-xl border border-slate-200 px-3 py-2 disabled:bg-slate-100"
+                                      >
+                                        {callStatuses.map((status) => (
+                                          <option key={status} value={status}>
+                                            {status}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      <input
+                                        type="date"
+                                        disabled={locked || draft.callStatus === "Payment Done"}
+                                        value={draft.followUpDate || ""}
+                                        onChange={(event) => updateFollowupDraft(group, { followUpDate: event.target.value })}
+                                        className="w-40 rounded-xl border border-slate-200 px-3 py-2 disabled:bg-slate-100 block"
+                                      />
+                                      <input
+                                        type="time"
+                                        disabled={locked || draft.callStatus === "Payment Done"}
+                                        value={draft.followUpTime || ""}
+                                        onChange={(event) => updateFollowupDraft(group, { followUpTime: event.target.value })}
+                                        className="w-40 rounded-xl border border-slate-200 px-3 py-2 disabled:bg-slate-100 block mt-1.5"
+                                      />
+                                      <label className="flex items-center gap-2 text-xs text-slate-600">
+                                        <input
+                                          type="checkbox"
+                                          disabled={locked || draft.callStatus === "Payment Done"}
+                                          checked={draft.reminderEnabled || false}
+                                          onChange={(event) => updateFollowupDraft(group, { reminderEnabled: event.target.checked })}
+                                        />
+                                        Reminder on
+                                      </label>
+                                    </div>
+                                  ) : (
+                                    <div>
+                                      <div className="font-semibold text-slate-800">{formatDateTime(group.followUpDate, group.followUpTime)}</div>
+                                      <div className="text-xs text-slate-500">{group.reminderEnabled ? "Reminder active" : "Reminder off"}</div>
+                                    </div>
+                                  )}
+                                </td>
+                              )}
+                              {visibleColumns.action && (
+                                <td className="py-3">
+                                  {editing ? (
+                                    <div className="flex flex-col gap-2">
+                                      <button
+                                        onClick={() => submitFollowupEdit(group)}
+                                        disabled={locked}
+                                        className="rounded-xl bg-slate-950 px-4 py-2 text-sm text-white disabled:bg-slate-300"
+                                      >
+                                        Save
+                                      </button>
+                                      {!followupEditMode ? (
+                                        <button
+                                          onClick={() => cancelFollowupEdit(group.groupKey)}
+                                          className="rounded-xl border border-slate-200 px-4 py-2 text-sm"
+                                        >
+                                          Cancel
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={() => beginFollowupEdit(group)}
+                                      disabled={locked}
+                                      className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm disabled:bg-slate-100"
+                                    >
+                                      <Pencil className="h-4 w-4" />
+                                      {locked ? "Locked" : "Edit"}
+                                    </button>
+                                  )}
+                                </td>
+                              )}
                             </tr>
                           );
                         })}

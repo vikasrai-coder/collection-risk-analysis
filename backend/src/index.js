@@ -38,11 +38,29 @@ app.use(async (_req, _res, next) => {
 
 // Helper to parse collectionDate in different formats robustly
 function parseCollectionDate(collectionDateStr) {
-  if (!collectionDateStr) return null;
+  if (collectionDateStr === undefined || collectionDateStr === null || collectionDateStr === "") return null;
   try {
     const cleanStr = String(collectionDateStr).trim();
+    if (!cleanStr) return null;
 
-    // Prioritize standard JS Date parsing for ISO, GMT, or alphabetic date formats
+    if (/^\d+(\.\d+)?$/.test(cleanStr)) {
+      const num = parseFloat(cleanStr);
+      if (num > 1000000000000) {
+        const d = new Date(num);
+        if (!isNaN(d.getTime())) return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      }
+      if (num > 1000000000) {
+        const d = new Date(num * 1000);
+        if (!isNaN(d.getTime())) return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      }
+      if (num > 20000 && num < 70000) {
+        const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+        const millisPerDay = 86400000;
+        const d = new Date(excelEpoch.getTime() + Math.floor(num) * millisPerDay);
+        if (!isNaN(d.getTime())) return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      }
+    }
+
     if (/[a-zA-Z]/.test(cleanStr) || cleanStr.includes('T')) {
       const parsed = new Date(cleanStr);
       if (!isNaN(parsed.getTime())) {
@@ -58,12 +76,10 @@ function parseCollectionDate(collectionDateStr) {
       const val2 = parseInt(numbers[2], 10);
 
       if (val0 > 1000) {
-        // YYYY-MM-DD or YYYY/MM/DD
         year = val0;
         month = val1 - 1;
         day = val2;
       } else if (val2 > 1000) {
-        // DD-MM-YYYY or MM-DD-YYYY or DD/MM/YYYY
         year = val2;
         if (val0 > 12) {
           day = val0;
@@ -72,12 +88,10 @@ function parseCollectionDate(collectionDateStr) {
           day = val1;
           month = val0 - 1;
         } else {
-          // Indian context: default to DD/MM/YYYY
           day = val0;
           month = val1 - 1;
         }
       } else {
-        // 2-digit year
         if (val0 > 50) {
           year = 1900 + val0;
           month = val1 - 1;
