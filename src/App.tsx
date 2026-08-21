@@ -58,6 +58,7 @@ type CollectionRecord = {
   customerName: string;
   lender: string;
   anchor: string;
+  anchorName?: string;
   mobile: string;
   alternateNumber: string;
   category: string;
@@ -107,6 +108,7 @@ type InteractionHistoryItem = {
   remark: string;
   followUpDate: string;
   followUpTime?: string;
+  mobile?: string;
   updatedAt: string;
   updatedBy: string;
 };
@@ -568,7 +570,9 @@ function parseCollectionDate(collectionDateStr: string | number | undefined | nu
       if (y === 2000) y = 2026;
       return new Date(Date.UTC(y, fallback.getMonth(), fallback.getDate()));
     }
-  } catch (e) {}
+  } catch (e) {
+    void e;
+  }
   return null;
 }
 
@@ -796,7 +800,7 @@ async function pushBackendState(
   history: UploadHistory[],
   interaction_logs: InteractionHistoryItem[],
   telegram_settings: TelegramSettings
-) {
+): Promise<{ success?: boolean; updatedAt?: string }> {
   const finalRecords = cleanupAndResetStaleRecords(records);
   const response = await fetch(`${API_BASE_URL}/api/state`, {
     method: "POST",
@@ -813,6 +817,7 @@ async function pushBackendState(
   if (!response.ok) {
     throw new Error(`Backend save failed: ${response.status}`);
   }
+  return response.json();
 }
 
 function isLocked(record: CollectionRecord) {
@@ -1075,7 +1080,9 @@ function App() {
         });
         return initial as Record<FollowupColumnKey, boolean>;
       }
-    } catch (e) {}
+    } catch (e) {
+      void e;
+    }
     const initial: Record<string, boolean> = {};
     FOLLOWUP_COLUMNS.forEach((col) => {
       initial[col.key] = col.defaultVisible;
@@ -5761,7 +5768,7 @@ function App() {
                               setTesterResponse(null);
                               try {
                                 let url = `${API_BASE_URL}/api/external/v1/${testerEndpoint}`;
-                                let options: any = {
+                                const options: RequestInit = {
                                   headers: {
                                     "x-api-key": testerSelectedKey,
                                     "Content-Type": "application/json"
@@ -6434,7 +6441,7 @@ function App() {
                               );
 
                               // Convert matching interactionLogs to RemarkEntry objects
-                              const logsAsRemarks = logsForUser.map((log) => ({
+                              const logsAsRemarks: RemarkEntry[] = logsForUser.map((log) => ({
                                 id: log.id,
                                 text: log.remark,
                                 timestamp: log.updatedAt,
