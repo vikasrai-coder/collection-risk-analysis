@@ -242,83 +242,14 @@ function getWhatsAppLink(phone: string) {
   return `https://web.whatsapp.com/send?phone=${phoneWithCountry}`;
 }
 
-const seedRecords: CollectionRecord[] = [
-  {
-    id: "seed-1",
-    userId: "USR-1001",
-    loanId: "LN-20411",
-    customerName: "Aarav Retail",
-    lender: "Muthoot Fincorp Limited",
-    anchor: "Riya Singh",
-    mobile: "9876543210",
-    alternateNumber: "",
-    category: "Retail",
-    status: "Overdue",
-    loanAmount: 125000,
-    defaultAmount: 32000,
-    collectionDate: "2026-05-14",
-    riskScore: 74,
-    paymentProbability: 31,
-    callStatus: "Pending",
-    remark: "",
-    followUpDate: "2026-05-18",
-    reminderEnabled: true,
-    updatedAt: "",
-    pendingAmount: 32000,
-    partialPaymentSettled: 0,
-    remarkHistory: [],
-  },
-  {
-    id: "seed-2",
-    userId: "USR-1002",
-    loanId: "LN-20412",
-    customerName: "Nexa Traders",
-    lender: "Zeal Holdings Private Limited",
-    anchor: "Amit Gupta",
-    mobile: "9988776655",
-    alternateNumber: "9988776600",
-    category: "Wholesale",
-    status: "Bounce",
-    loanAmount: 220000,
-    defaultAmount: 54000,
-    collectionDate: "2026-05-13",
-    riskScore: 82,
-    paymentProbability: 24,
-    callStatus: "Promise To Pay",
-    remark: "Will confirm on Monday.",
-    followUpDate: "2026-05-19",
-    reminderEnabled: true,
-    updatedAt: "",
-    pendingAmount: 54000,
-    partialPaymentSettled: 0,
-    remarkHistory: [],
-  },
-  {
-    id: "seed-3",
-    userId: "USR-1003",
-    loanId: "LN-20413",
-    customerName: "Ora Foods",
-    lender: "ORA Finance Private Limited",
-    anchor: "",
-    mobile: "9123456780",
-    alternateNumber: "",
-    category: "Food",
-    status: "Overdue",
-    loanAmount: 95000,
-    defaultAmount: 18000,
-    collectionDate: "2026-05-15",
-    riskScore: 58,
-    paymentProbability: 48,
-    callStatus: "Pending",
-    remark: "",
-    followUpDate: "",
-    reminderEnabled: false,
-    updatedAt: "",
-    pendingAmount: 18000,
-    partialPaymentSettled: 0,
-    remarkHistory: [],
-  },
-];
+function isDummySeedRecord(r: any): boolean {
+  if (!r) return true;
+  if (r.id && String(r.id).startsWith("seed-")) return true;
+  if (r.customerName === "Aarav Retail" || r.customerName === "Nexa Traders" || r.customerName === "Ora Foods") return true;
+  return false;
+}
+
+const seedRecords: CollectionRecord[] = [];
 
 function normalizeHeader(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -754,7 +685,12 @@ async function readPersistedRecords() {
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         const result = request.result as CollectionRecord[] | undefined;
-        resolve(result && result.length ? restrictToAllowedLenders(result) : seedRecords);
+        if (result && Array.isArray(result) && result.length) {
+          const nonDummy = result.filter(r => !isDummySeedRecord(r));
+          resolve(nonDummy.length ? restrictToAllowedLenders(nonDummy) : []);
+        } else {
+          resolve([]);
+        }
       };
     });
   } catch {
@@ -801,7 +737,11 @@ async function pushBackendState(
   interaction_logs: InteractionHistoryItem[],
   telegram_settings: TelegramSettings
 ): Promise<{ success?: boolean; updatedAt?: string }> {
-  const finalRecords = cleanupAndResetStaleRecords(records);
+  const validRecords = records.filter(r => !isDummySeedRecord(r));
+  if (!validRecords.length) {
+    return { success: false };
+  }
+  const finalRecords = cleanupAndResetStaleRecords(validRecords);
   const response = await fetch(`${API_BASE_URL}/api/state`, {
     method: "POST",
     headers: {
@@ -949,14 +889,15 @@ function collapseSheetImportLogs(logs: InteractionHistoryItem[]): InteractionHis
   );
 }
 
-function loadRecords() {
+function loadRecords(): CollectionRecord[] {
   const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return seedRecords;
+  if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as CollectionRecord[];
-    return parsed.length ? restrictToAllowedLenders(parsed) : seedRecords;
+    const valid = Array.isArray(parsed) ? parsed.filter(r => !isDummySeedRecord(r)) : [];
+    return valid.length ? restrictToAllowedLenders(valid) : [];
   } catch {
-    return seedRecords;
+    return [];
   }
 }
 
@@ -1179,8 +1120,11 @@ function App() {
       if (state.updatedAt) {
         lastUpdatedAtRef.current = state.updatedAt;
       }
-      if (Array.isArray(state.records) && state.records.length) {
-        setRecords(cleanupAndResetStaleRecords(restrictToAllowedLenders(state.records)));
+      if (Array.isArray(state.records)) {
+        const validRecs = state.records.filter((r: any) => !isDummySeedRecord(r));
+        if (validRecs.length) {
+          setRecords(cleanupAndResetStaleRecords(restrictToAllowedLenders(validRecs)));
+        }
       }
       if (Array.isArray(state.history) && state.history.length) {
         setUploadHistory(state.history);
@@ -1241,7 +1185,10 @@ function App() {
         lastUpdatedAtRef.current = state.updatedAt;
       }
       if (Array.isArray(state.records)) {
-        setRecords(cleanupAndResetStaleRecords(restrictToAllowedLenders(state.records)));
+        const validRecs = state.records.filter((r: any) => !isDummySeedRecord(r));
+        if (validRecs.length) {
+          setRecords(cleanupAndResetStaleRecords(restrictToAllowedLenders(validRecs)));
+        }
       }
       if (Array.isArray(state.history)) {
         setUploadHistory(state.history);
@@ -1621,8 +1568,12 @@ function App() {
           lastUpdatedAtRef.current = state.updatedAt;
         }
 
-        if (Array.isArray(state.records) && state.records.length) {
-          setRecords(cleanupAndResetStaleRecords(restrictToAllowedLenders(state.records)));
+        const validStateRecords = Array.isArray(state.records)
+          ? state.records.filter((r: any) => !isDummySeedRecord(r))
+          : [];
+
+        if (validStateRecords.length) {
+          setRecords(cleanupAndResetStaleRecords(restrictToAllowedLenders(validStateRecords)));
         } else {
           const localRecs = await readPersistedRecords().catch(() => loadRecords());
           if (active) setRecords(cleanupAndResetStaleRecords(localRecs));

@@ -967,6 +967,127 @@ app.post('/api/auth/forgot-password', async (req, res) => {
   }
 });
 
+function isDummySeedRecord(r) {
+  if (!r) return true;
+  if (r.id && String(r.id).startsWith('seed-')) return true;
+  if (r.customerName === 'Aarav Retail' || r.customerName === 'Nexa Traders' || r.customerName === 'Ora Foods') return true;
+  return false;
+}
+
+async function recoverRecordsFromCollections() {
+  try {
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+    let collections = [];
+    let interactionLogs = [];
+
+    if (supabaseUrl && supabaseKey) {
+      const supabase = createClient(supabaseUrl, supabaseKey);
+      const { data: cols } = await supabase.from('collections').select('*').limit(3000);
+      if (cols && cols.length) collections = cols;
+
+      const { data: logsRow } = await supabase.from('app_state').select('payload').eq('state_key', 'interaction_logs').single();
+      if (logsRow?.payload) interactionLogs = logsRow.payload;
+    }
+
+    if (!collections.length) {
+      try {
+        const poolRes = await query('SELECT * FROM collections');
+        if (poolRes && poolRes.rows && poolRes.rows.length) {
+          collections = poolRes.rows;
+        }
+        const logsRes = await query("SELECT payload FROM app_state WHERE state_key = 'interaction_logs'");
+        if (logsRes && logsRes.rows && logsRes.rows[0]?.payload) {
+          interactionLogs = logsRes.rows[0].payload;
+        }
+      } catch (e) {
+        console.warn('Fallback query for collections failed:', e.message);
+      }
+    }
+
+    if (!collections.length) return [];
+
+    const logsByLoan = new Map();
+    for (const log of interactionLogs) {
+      if (!log || !log.loanId) continue;
+      if (!logsByLoan.has(log.loanId)) logsByLoan.set(log.loanId, []);
+      logsByLoan.get(log.loanId).push(log);
+    }
+    for (const list of logsByLoan.values()) {
+      list.sort((a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime());
+    }
+
+    const reconstructed = collections.map(c => {
+      const loanLogs = logsByLoan.get(c.loan_id) || [];
+      const latestLog = loanLogs.length ? loanLogs[loanLogs.length - 1] : null;
+
+      const logEntries = loanLogs.map(l => ({
+        id: l.id,
+        text: l.remark || '',
+        timestamp: l.updatedAt,
+        addedBy: l.updatedBy || 'Agent',
+        invoiceNumber: l.invoiceNumber,
+        partialPaymentAmount: l.partialPaymentAmount,
+        remainingAmount: l.remainingAmount
+      })).filter(e => e.text && e.text.trim() && e.text !== 'Daily Sheet Sync');
+
+      const uniqueRemarks = Array.from(
+        new Map(
+          logEntries.map(e => [`${e.text.trim()}-${e.addedBy}-${(e.timestamp || '').slice(0, 16)}`, e])
+        ).values()
+      );
+      uniqueRemarks.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+      const amountNum = parseFloat(c.amount) || 0;
+      return {
+        id: c.id,
+        userId: c.customer_id,
+        loanId: c.loan_id,
+        customerName: c.customer_name || 'Unknown',
+        lender: c.lender || 'Zeal Holdings Private Limited',
+        anchor: '',
+        mobile: '',
+        alternateNumber: '',
+        category: c.category || 'SUPPLY_CHAIN',
+        type: c.category || 'SUPPLY_CHAIN',
+        status: latestLog?.callStatus === 'Payment Done' ? 'Closed' : (c.status || 'Bounced'),
+        loanAmount: amountNum,
+        defaultAmount: amountNum,
+        pendingAmount: amountNum,
+        collectionDate: c.collection_date || '',
+        collectionDateStr: c.collection_date || '',
+        riskScore: 60,
+        paymentProbability: 25,
+        callStatus: latestLog?.callStatus || 'Pending',
+        remark: latestLog?.remark || '',
+        followUpDate: latestLog?.followUpDate || '',
+        followUpTime: latestLog?.followUpTime || '',
+        reminderEnabled: false,
+        updatedAt: latestLog?.updatedAt || c.updated_at || new Date().toISOString(),
+        updatedBy: latestLog?.updatedBy || 'System Import',
+        remarkHistory: uniqueRemarks,
+        partialPaymentSettled: 0
+      };
+    });
+
+    const enriched = await enrichRecordsWithProfiles(reconstructed);
+    const cleaned = cleanupAndResetStaleRecords(enriched);
+
+    await query(
+      `INSERT INTO app_state (state_key, payload, updated_at)
+       VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (state_key)
+       DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()`,
+      ['records', JSON.stringify(cleaned)]
+    );
+
+    return cleaned;
+  } catch (err) {
+    console.error('Self-healing recoverRecordsFromCollections error:', err.message);
+    return [];
+  }
+}
+
 app.get('/api/state', async (req, res) => {
   const { lastUpdatedAt } = req.query || {};
 
@@ -1047,10 +1168,10 @@ app.get('/api/state', async (req, res) => {
 
     for (const row of result.rows) {
       if (row.state_key === 'records') {
-        const rawRecords = row.payload || [];
+        const rawRecords = (row.payload || []).filter(r => !isDummySeedRecord(r));
         const cleanedRecords = cleanupAndResetStaleRecords(rawRecords);
         recordsList = await enrichRecordsWithProfiles(cleanedRecords);
-        if (JSON.stringify(rawRecords) !== JSON.stringify(recordsList)) {
+        if (JSON.stringify(row.payload) !== JSON.stringify(recordsList)) {
           recordsUpdated = true;
         }
         payload.records = recordsList;
@@ -1063,7 +1184,18 @@ app.get('/api/state', async (req, res) => {
       }
     }
 
-    if (recordsUpdated) {
+    // Self-healing: if records is empty or only dummy records existed, recover from collections
+    if (!payload.records || payload.records.length === 0) {
+      console.log('[GET /api/state] Records empty or only dummy seeds found. Auto-healing from collections table...');
+      const recovered = await recoverRecordsFromCollections();
+      if (recovered && recovered.length > 0) {
+        payload.records = recovered;
+        payload.updatedAt = new Date().toISOString();
+        recordsUpdated = false;
+      }
+    }
+
+    if (recordsUpdated && payload.records.length > 0) {
       const updateRes = await query(
         `
         INSERT INTO app_state (state_key, payload, updated_at)
@@ -1095,24 +1227,32 @@ app.post('/api/state', async (req, res) => {
     );
     const sentReminders = sentResult.rows[0]?.payload || [];
 
-    const enrichedRecords = await enrichRecordsWithProfiles(records);
-    const finalRecords = cleanupAndResetStaleRecords(enrichedRecords).map(rec => {
-      const key = `${rec.userId}-${rec.followUpDate || 'no-date'}-${rec.followUpTime || 'no-time'}`;
-      if (sentReminders.includes(key)) {
-        return { ...rec, reminderEnabled: false };
-      }
-      return rec;
-    });
+    // Filter out dummy/seed records
+    const cleanRecords = (Array.isArray(records) ? records : []).filter(r => !isDummySeedRecord(r));
 
-    await query(
-      `
-      INSERT INTO app_state (state_key, payload, updated_at)
-      VALUES ($1, $2::jsonb, NOW())
-      ON CONFLICT (state_key)
-      DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
-      `,
-      ['records', JSON.stringify(finalRecords)],
-    );
+    // Guard: Never allow client to wipe real database records with dummy seed records or empty payload
+    if (cleanRecords.length > 0) {
+      const enrichedRecords = await enrichRecordsWithProfiles(cleanRecords);
+      const finalRecords = cleanupAndResetStaleRecords(enrichedRecords).map(rec => {
+        const key = `${rec.userId}-${rec.followUpDate || 'no-date'}-${rec.followUpTime || 'no-time'}`;
+        if (sentReminders.includes(key)) {
+          return { ...rec, reminderEnabled: false };
+        }
+        return rec;
+      });
+
+      await query(
+        `
+        INSERT INTO app_state (state_key, payload, updated_at)
+        VALUES ($1, $2::jsonb, NOW())
+        ON CONFLICT (state_key)
+        DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
+        `,
+        ['records', JSON.stringify(finalRecords)],
+      );
+    } else if (records.length > 0) {
+      console.warn('[POST /api/state] Incoming payload contains only dummy seed records. Preserving existing database records.');
+    }
 
     await query(
       `
